@@ -6,6 +6,8 @@ import { configSchema, defaultLimits } from "./investigation/contract.ts";
 import { createOpenAIModel } from "./models/openai.ts";
 import { explore } from "./orchestration/explore.ts";
 import { prepareSnapshot } from "./repository/snapshot.ts";
+import { writeSavedReport } from "./reporting/report.ts";
+import { ReportValidationError } from "./reporting/validation.ts";
 
 async function main() {
   const { values } = parseArgs({
@@ -78,10 +80,22 @@ async function main() {
   await writeFile(output, JSON.stringify(result, null, 2) + "\n", {
     mode: 0o600,
   });
+  let report: string | undefined;
+  try {
+    report = await writeSavedReport(output);
+  } catch (error) {
+    console.error(
+      error instanceof ReportValidationError
+        ? error.message
+        : "Run JSON was saved, but its Markdown report could not be written.",
+    );
+    process.exitCode = 1;
+  }
   console.log(
     JSON.stringify(
       {
         output,
+        report,
         completion: result.completion,
         termination: result.termination,
         usage: result.usage,

@@ -9,6 +9,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "investigate": "node src/cli.ts",
+    "report": "node src/report-cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test evaluation/*.test.ts"
   },

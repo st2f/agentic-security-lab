@@ -1,6 +1,6 @@
 # Model-directed exploration
 
-Step 4 adds a local CLI and one-model exploration loop. It produces `run.json`, not the rendered Markdown report planned for Step 5.
+The local CLI runs a one-model exploration loop, saves `run.json`, and renders a [Markdown report](./reporting.md) from that structured result.
 
 ## Responsibilities
 
@@ -39,7 +39,7 @@ npm run investigate -- \
 
 Omit `--question` for open exploration. Defaults are `gpt-6-luna`, medium reasoning, a maximum of three final candidates, 12 model calls, 40 inspection calls, and 180 seconds. Flags `--model`, `--reasoning`, `--max-candidates`, `--model-calls`, `--tool-calls`, and `--elapsed-ms` adjust those values. Final candidate limits are 1–10; provisional lists may contain up to 20 candidates.
 
-The default output parent is `priv/runs`. Override it with `--output`. Each run has a unique directory with `source/`, `manifest.json`, and `run.json`. The model can inspect only `source/`. Result artifacts contain inspected source excerpts; choose their storage accordingly. SIGINT requests cancellation and saves an incomplete result. An incomplete run exits with status 1.
+The default output parent is `priv/runs`. Override it with `--output`. Each run has a unique directory with `source/`, `manifest.json`, `run.json`, and, when report validation succeeds, `report.md`. The model can inspect only `source/`. Result artifacts contain inspected source excerpts; choose their storage accordingly. SIGINT requests cancellation and saves an incomplete result. An incomplete run or report-generation failure exits with status 1; the saved JSON remains available.
 
 ## Decisions and evidence
 
