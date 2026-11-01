@@ -6,11 +6,20 @@
     "node": ">=24"
   },
   "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "investigate": "node src/cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test evaluation/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
+    "prettier": "^3.9.10",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^1.6.0",
+    "openai": "^7.47.0",
+    "zod": "^4.6.7"
   }
 }

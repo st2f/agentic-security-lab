@@ -1,10 +1,10 @@
 # Milestone 1 | Iterative, model-directed repository exploration → prioritized risk hypotheses → report
 
-|  | Minimum scope |
-| --- | --- |
-| Inputs | Local repository snapshot, optional investigation question, explicit investigation budget |
-| Behavior | One model chooses read-only search and file-reading actions, follows evidence, revises hypotheses, then stops |
-| Outputs | Prioritized hypotheses, precise source references, reasoning and uncertainty, action trace, budget usage |
+|            | Minimum scope                                                                                                                                                                                                           |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inputs     | Local repository snapshot, optional investigation question, explicit investigation budget                                                                                                                               |
+| Behavior   | One model chooses read-only search and file-reading actions, follows evidence, revises hypotheses, then stops                                                                                                           |
+| Outputs    | Prioritized hypotheses, precise source references, reasoning and uncertainty, action trace, budget usage                                                                                                                |
 | Acceptance | Demonstrates a follow-up action driven by earlier evidence; references resolve against the inspected snapshot; a controlled fixture includes vulnerable and secure cases; limits and repository boundaries are enforced |
 
 ## Learning objective

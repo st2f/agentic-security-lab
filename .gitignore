@@ -1,4 +1,5 @@
-AGENTS.md
-priv/
 .env
+.vscode/
+AGENTS.md
 node_modules/
+priv/

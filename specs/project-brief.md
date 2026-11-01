@@ -201,14 +201,14 @@ Development must be incremental. Each milestone should produce independently dem
 
 Suggested progression:
 
-| Milestone | Deliverable |
-| --- | --- |
-| 1 | Iterative, model-directed repository exploration → prioritized risk hypotheses → report |
-| 2 | Pre-analysis → verification → report with evidence and next steps |
-| 3 | Integration of an established security testing tool |
-| 4 | Capability-gap identification and suggested additional verification tools |
-| 5 | Separate analysis and verification model configurations |
-| 6 | Iterative verification and reassessment with bounded rounds |
+| Milestone | Deliverable                                                                             |
+| --------- | --------------------------------------------------------------------------------------- |
+| 1         | Iterative, model-directed repository exploration → prioritized risk hypotheses → report |
+| 2         | Pre-analysis → verification → report with evidence and next steps                       |
+| 3         | Integration of an established security testing tool                                     |
+| 4         | Capability-gap identification and suggested additional verification tools               |
+| 5         | Separate analysis and verification model configurations                                 |
+| 6         | Iterative verification and reassessment with bounded rounds                             |
 
 This is a conceptual progression, not a mandatory implementation sequence. Adjust it when an experiment demonstrates a better order.
 

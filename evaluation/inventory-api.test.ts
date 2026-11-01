@@ -42,9 +42,12 @@ test("availability exposes another tenant's inventory when its ID is known", () 
 
 test("both endpoints return not found for an unknown item", () => {
   for (const endpoint of endpoints()) {
-    assert.deepEqual(endpoint.handle({ principal, params: { id: "missing" } }), {
-      status: 404,
-      body: { error: "Item not found" },
-    });
+    assert.deepEqual(
+      endpoint.handle({ principal, params: { id: "missing" } }),
+      {
+        status: 404,
+        body: { error: "Item not found" },
+      },
+    );
   }
 });
