@@ -1,0 +1,860 @@
+{
+  "runId": "106b1bbc-784d-498a-bc57-9ec6ed78546c",
+  "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+  "request": {
+    "maxCandidates": 3,
+    "limits": {
+      "modelCalls": 12,
+      "toolCalls": 40,
+      "elapsedMs": 180000,
+      "toolResponseBytes": 16384,
+      "totalToolResponseBytes": 262144
+    },
+    "model": "gpt-6-luna",
+    "reasoning": "medium",
+    "provider": "openai",
+    "commit": "76cdccf307e7a020dc91be21ae53b6c8a1cace2a",
+    "subtree": "fixtures/inventory-api"
+  },
+  "completion": "completed",
+  "termination": {
+    "reason": "model_finished"
+  },
+  "finalCandidates": [
+    {
+      "id": "tenant-availability-bypass",
+      "claim": "An authenticated user can likely retrieve another tenant's inventory quantity through GET /items/:id/availability by supplying that item's ID; the availability query ignores the principal and performs a global ID lookup.",
+      "rationale": "The endpoint forwards the caller's ID to getAvailability; that query explicitly names the principal parameter as unused and calls findById, whose repository implementation matches only the ID. It returns the item's quantity. In contrast, the sibling details query uses findForTenant. The README states users may read only their own tenant's inventory regardless of whether another item's ID is known, and says route parameters are caller-controlled.",
+      "supportingEvidence": [
+        {
+          "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+          "path": "src/http.ts",
+          "startLine": 24,
+          "endLine": 35,
+          "toolCallId": "tool-2"
+        },
+        {
+          "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+          "path": "src/queries.ts",
+          "startLine": 6,
+          "endLine": 17,
+          "toolCallId": "tool-3"
+        },
+        {
+          "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+          "path": "src/repository.ts",
+          "startLine": 7,
+          "endLine": 12,
+          "toolCallId": "tool-4"
+        },
+        {
+          "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+          "path": "README.md",
+          "startLine": 8,
+          "endLine": 10,
+          "toolCallId": "tool-6"
+        }
+      ],
+      "contradictoryEvidence": [],
+      "uncertainties": [
+        "No runtime tests or server adapter are included, so actual deployment behavior is unverified.",
+        "The hosting adapter is documented as supplying a trusted authenticated principal, but that adapter is outside this snapshot."
+      ],
+      "priorityReason": "High-confidence authorization asymmetry with direct cross-tenant data exposure; the returned quantity is sensitive inventory information and violates the documented tenant boundary.",
+      "nextChecks": [
+        "Add a test showing a principal from tenant A receives not-found for an item owned by tenant B on both endpoints.",
+        "Scope the availability lookup by principal.tenantId, matching getItem/findForTenant behavior.",
+        "Verify the deployed adapter uses these query functions without a separate item-level authorization control."
+      ]
+    }
+  ],
+  "provisionalCandidates": [],
+  "scopeAndLimitations": [
+    "Read-only source inspection; runtime verification was not performed.",
+    "No credible candidates does not establish that the repository is secure.",
+    "Inspection was limited to the five listed files in this snapshot; no runtime behavior was executed.",
+    "The authentication adapter and deployment wiring are outside the snapshot. The issue concerns authorization after the adapter supplies the trusted principal.",
+    "No other credible candidate was identified in the inspected source."
+  ],
+  "exclusions": [],
+  "trace": [
+    {
+      "id": "event-1",
+      "type": "model",
+      "startedAt": "2026-11-01T19:00:57.654Z",
+      "durationMs": 1939.461459,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "Start with the repository inventory to identify application entry points, security-sensitive components, and tests before selecting focused inspections.",
+        "basedOnToolCallIds": [],
+        "checkpoint": null,
+        "directory": ".",
+        "offset": 0,
+        "limit": 50,
+        "name": "list_files"
+      }
+    },
+    {
+      "id": "event-2",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:00:59.600Z",
+      "durationMs": 0.5275420000002669,
+      "outcome": "ok",
+      "toolCallId": "tool-1",
+      "arguments": {
+        "name": "list_files",
+        "directory": ".",
+        "offset": 0,
+        "limit": 50
+      },
+      "result": {
+        "kind": "list_files",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "files": [
+          "README.md",
+          "src/http.ts",
+          "src/model.ts",
+          "src/queries.ts",
+          "src/repository.ts"
+        ],
+        "truncated": false,
+        "nextOffset": null
+      }
+    },
+    {
+      "id": "event-3",
+      "type": "model",
+      "startedAt": "2026-11-01T19:00:59.602Z",
+      "durationMs": 1946.9225420000002,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "Read the HTTP layer first because request parsing, authentication, and response handling commonly define the exposed trust boundary.",
+        "basedOnToolCallIds": [
+          "tool-1"
+        ],
+        "checkpoint": null,
+        "path": "src/http.ts",
+        "startLine": 1,
+        "endLine": 200,
+        "name": "read_lines"
+      }
+    },
+    {
+      "id": "event-4",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:01:01.551Z",
+      "durationMs": 2.0089170000001104,
+      "outcome": "ok",
+      "toolCallId": "tool-2",
+      "arguments": {
+        "name": "read_lines",
+        "path": "src/http.ts",
+        "startLine": 1,
+        "endLine": 200
+      },
+      "result": {
+        "kind": "read_lines",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "path": "src/http.ts",
+        "lines": [
+          {
+            "line": 1,
+            "text": "import type { Principal } from \"./model.ts\";"
+          },
+          {
+            "line": 2,
+            "text": "import type { InventoryRepository } from \"./repository.ts\";"
+          },
+          {
+            "line": 3,
+            "text": "import { createInventoryQueries } from \"./queries.ts\";"
+          },
+          {
+            "line": 4,
+            "text": ""
+          },
+          {
+            "line": 5,
+            "text": "type Request = {"
+          },
+          {
+            "line": 6,
+            "text": "  principal: Principal;"
+          },
+          {
+            "line": 7,
+            "text": "  params: { id: string };"
+          },
+          {
+            "line": 8,
+            "text": "};"
+          },
+          {
+            "line": 9,
+            "text": ""
+          },
+          {
+            "line": 10,
+            "text": "export function createInventoryEndpoints(repository: InventoryRepository) {"
+          },
+          {
+            "line": 11,
+            "text": "  const queries = createInventoryQueries(repository);"
+          },
+          {
+            "line": 12,
+            "text": ""
+          },
+          {
+            "line": 13,
+            "text": "  return ["
+          },
+          {
+            "line": 14,
+            "text": "    {"
+          },
+          {
+            "line": 15,
+            "text": "      method: \"GET\","
+          },
+          {
+            "line": 16,
+            "text": "      path: \"/items/:id\","
+          },
+          {
+            "line": 17,
+            "text": "      handle(request: Request) {"
+          },
+          {
+            "line": 18,
+            "text": "        const item = queries.getItem(request.principal, request.params.id);"
+          },
+          {
+            "line": 19,
+            "text": "        return item"
+          },
+          {
+            "line": 20,
+            "text": "          ? { status: 200, body: item }"
+          },
+          {
+            "line": 21,
+            "text": "          : { status: 404, body: { error: \"Item not found\" } };"
+          },
+          {
+            "line": 22,
+            "text": "      },"
+          },
+          {
+            "line": 23,
+            "text": "    },"
+          },
+          {
+            "line": 24,
+            "text": "    {"
+          },
+          {
+            "line": 25,
+            "text": "      method: \"GET\","
+          },
+          {
+            "line": 26,
+            "text": "      path: \"/items/:id/availability\","
+          },
+          {
+            "line": 27,
+            "text": "      handle(request: Request) {"
+          },
+          {
+            "line": 28,
+            "text": "        const availability = queries.getAvailability("
+          },
+          {
+            "line": 29,
+            "text": "          request.principal,"
+          },
+          {
+            "line": 30,
+            "text": "          request.params.id,"
+          },
+          {
+            "line": 31,
+            "text": "        );"
+          },
+          {
+            "line": 32,
+            "text": "        return availability"
+          },
+          {
+            "line": 33,
+            "text": "          ? { status: 200, body: availability }"
+          },
+          {
+            "line": 34,
+            "text": "          : { status: 404, body: { error: \"Item not found\" } };"
+          },
+          {
+            "line": 35,
+            "text": "      },"
+          },
+          {
+            "line": 36,
+            "text": "    },"
+          },
+          {
+            "line": 37,
+            "text": "  ];"
+          },
+          {
+            "line": 38,
+            "text": "}"
+          }
+        ],
+        "truncated": false,
+        "nextStartLine": null
+      }
+    },
+    {
+      "id": "event-5",
+      "type": "model",
+      "startedAt": "2026-11-01T19:01:01.554Z",
+      "durationMs": 1834.5890829999998,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "Trace the endpoint calls into query authorization and filtering, which determine whether principals can access other tenants' inventory.",
+        "basedOnToolCallIds": [
+          "tool-2"
+        ],
+        "checkpoint": null,
+        "path": "src/queries.ts",
+        "startLine": 1,
+        "endLine": 200,
+        "name": "read_lines"
+      }
+    },
+    {
+      "id": "event-6",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:01:03.390Z",
+      "durationMs": 1.039958000000297,
+      "outcome": "ok",
+      "toolCallId": "tool-3",
+      "arguments": {
+        "name": "read_lines",
+        "path": "src/queries.ts",
+        "startLine": 1,
+        "endLine": 200
+      },
+      "result": {
+        "kind": "read_lines",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "path": "src/queries.ts",
+        "lines": [
+          {
+            "line": 1,
+            "text": "import type { Principal } from \"./model.ts\";"
+          },
+          {
+            "line": 2,
+            "text": "import type { InventoryRepository } from \"./repository.ts\";"
+          },
+          {
+            "line": 3,
+            "text": ""
+          },
+          {
+            "line": 4,
+            "text": "export function createInventoryQueries(repository: InventoryRepository) {"
+          },
+          {
+            "line": 5,
+            "text": "  return {"
+          },
+          {
+            "line": 6,
+            "text": "    getItem(principal: Principal, id: string) {"
+          },
+          {
+            "line": 7,
+            "text": "      const item = repository.findForTenant(id, principal.tenantId);"
+          },
+          {
+            "line": 8,
+            "text": "      if (!item) return undefined;"
+          },
+          {
+            "line": 9,
+            "text": ""
+          },
+          {
+            "line": 10,
+            "text": "      return { id: item.id, sku: item.sku, quantity: item.quantity };"
+          },
+          {
+            "line": 11,
+            "text": "    },"
+          },
+          {
+            "line": 12,
+            "text": ""
+          },
+          {
+            "line": 13,
+            "text": "    getAvailability(_principal: Principal, id: string) {"
+          },
+          {
+            "line": 14,
+            "text": "      const item = repository.findById(id);"
+          },
+          {
+            "line": 15,
+            "text": "      if (!item) return undefined;"
+          },
+          {
+            "line": 16,
+            "text": ""
+          },
+          {
+            "line": 17,
+            "text": "      return { id: item.id, quantity: item.quantity };"
+          },
+          {
+            "line": 18,
+            "text": "    },"
+          },
+          {
+            "line": 19,
+            "text": "  };"
+          },
+          {
+            "line": 20,
+            "text": "}"
+          }
+        ],
+        "truncated": false,
+        "nextStartLine": null
+      }
+    },
+    {
+      "id": "event-7",
+      "type": "model",
+      "startedAt": "2026-11-01T19:01:03.393Z",
+      "durationMs": 2208.8409999999994,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "The availability query appears to ignore the caller's principal; inspect repository semantics and data model to determine whether this exposes cross-tenant records.",
+        "basedOnToolCallIds": [
+          "tool-3"
+        ],
+        "checkpoint": null,
+        "path": "src/repository.ts",
+        "startLine": 1,
+        "endLine": 200,
+        "name": "read_lines"
+      }
+    },
+    {
+      "id": "event-8",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:01:05.604Z",
+      "durationMs": 1.1757500000003347,
+      "outcome": "ok",
+      "toolCallId": "tool-4",
+      "arguments": {
+        "name": "read_lines",
+        "path": "src/repository.ts",
+        "startLine": 1,
+        "endLine": 200
+      },
+      "result": {
+        "kind": "read_lines",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "path": "src/repository.ts",
+        "lines": [
+          {
+            "line": 1,
+            "text": "import type { InventoryItem } from \"./model.ts\";"
+          },
+          {
+            "line": 2,
+            "text": ""
+          },
+          {
+            "line": 3,
+            "text": "export function createInventoryRepository(rows: readonly InventoryItem[]) {"
+          },
+          {
+            "line": 4,
+            "text": "  const items = rows.map((row) => ({ ...row }));"
+          },
+          {
+            "line": 5,
+            "text": ""
+          },
+          {
+            "line": 6,
+            "text": "  return {"
+          },
+          {
+            "line": 7,
+            "text": "    findById(id: string): InventoryItem | undefined {"
+          },
+          {
+            "line": 8,
+            "text": "      return items.find((item) => item.id === id);"
+          },
+          {
+            "line": 9,
+            "text": "    },"
+          },
+          {
+            "line": 10,
+            "text": ""
+          },
+          {
+            "line": 11,
+            "text": "    findForTenant(id: string, tenantId: string): InventoryItem | undefined {"
+          },
+          {
+            "line": 12,
+            "text": "      return items.find((item) => item.id === id && item.tenantId === tenantId);"
+          },
+          {
+            "line": 13,
+            "text": "    },"
+          },
+          {
+            "line": 14,
+            "text": "  };"
+          },
+          {
+            "line": 15,
+            "text": "}"
+          },
+          {
+            "line": 16,
+            "text": ""
+          },
+          {
+            "line": 17,
+            "text": "export type InventoryRepository = ReturnType<typeof createInventoryRepository>;"
+          }
+        ],
+        "truncated": false,
+        "nextStartLine": null
+      }
+    },
+    {
+      "id": "event-9",
+      "type": "model",
+      "startedAt": "2026-11-01T19:01:05.606Z",
+      "durationMs": 1829.4127919999992,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "Confirm that tenant ownership is part of the inventory record and look for any model-level constraints or alternate semantics that could limit the suspected exposure.",
+        "basedOnToolCallIds": [
+          "tool-3",
+          "tool-4"
+        ],
+        "checkpoint": null,
+        "path": "src/model.ts",
+        "startLine": 1,
+        "endLine": 100,
+        "name": "read_lines"
+      }
+    },
+    {
+      "id": "event-10",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:01:07.437Z",
+      "durationMs": 1.1268330000002607,
+      "outcome": "ok",
+      "toolCallId": "tool-5",
+      "arguments": {
+        "name": "read_lines",
+        "path": "src/model.ts",
+        "startLine": 1,
+        "endLine": 100
+      },
+      "result": {
+        "kind": "read_lines",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "path": "src/model.ts",
+        "lines": [
+          {
+            "line": 1,
+            "text": "export type Principal = {"
+          },
+          {
+            "line": 2,
+            "text": "  userId: string;"
+          },
+          {
+            "line": 3,
+            "text": "  tenantId: string;"
+          },
+          {
+            "line": 4,
+            "text": "};"
+          },
+          {
+            "line": 5,
+            "text": ""
+          },
+          {
+            "line": 6,
+            "text": "export type InventoryItem = {"
+          },
+          {
+            "line": 7,
+            "text": "  id: string;"
+          },
+          {
+            "line": 8,
+            "text": "  tenantId: string;"
+          },
+          {
+            "line": 9,
+            "text": "  sku: string;"
+          },
+          {
+            "line": 10,
+            "text": "  quantity: number;"
+          },
+          {
+            "line": 11,
+            "text": "};"
+          }
+        ],
+        "truncated": false,
+        "nextStartLine": null
+      }
+    },
+    {
+      "id": "event-11",
+      "type": "model",
+      "startedAt": "2026-11-01T19:01:07.440Z",
+      "durationMs": 7994.830083000001,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "Review repository documentation for assumptions about endpoint authorization or caller authentication that could qualify or contradict the code-level finding.",
+        "basedOnToolCallIds": [
+          "tool-1",
+          "tool-2",
+          "tool-3",
+          "tool-4",
+          "tool-5"
+        ],
+        "checkpoint": [
+          {
+            "id": "tenant-availability-bypass",
+            "claim": "The item availability endpoint may disclose inventory quantities across tenants because it passes the principal to a query that ignores it and retrieves records by globally matched ID.",
+            "rationale": "This is a concrete authorization asymmetry: the sibling item endpoint scopes repository lookup by tenant, while availability uses an unscoped lookup and returns quantity. Confirm endpoint exposure and repository semantics, and check for surrounding authentication assumptions.",
+            "supportingEvidence": [
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/queries.ts",
+                "startLine": 13,
+                "endLine": 17,
+                "toolCallId": "tool-3"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/repository.ts",
+                "startLine": 7,
+                "endLine": 12,
+                "toolCallId": "tool-4"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/http.ts",
+                "startLine": 24,
+                "endLine": 35,
+                "toolCallId": "tool-2"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/model.ts",
+                "startLine": 1,
+                "endLine": 10,
+                "toolCallId": "tool-5"
+              }
+            ],
+            "contradictoryEvidence": [],
+            "uncertainties": [
+              "The snapshot has no server/bootstrap code showing how principals are authenticated or how endpoint routing is mounted.",
+              "It is not known whether item IDs are globally unique or whether another upstream policy restricts item access."
+            ],
+            "priorityReason": "Prioritize as a likely tenant isolation / IDOR issue because the HTTP route accepts an item ID and availability returns another tenant's quantity without checking tenant ownership.",
+            "nextChecks": [
+              "Inspect documentation for intended access model and deployment/authentication assumptions.",
+              "Check for other authorization controls in any remaining source files or endpoint wiring."
+            ]
+          }
+        ],
+        "path": "README.md",
+        "startLine": 1,
+        "endLine": 200,
+        "name": "read_lines"
+      }
+    },
+    {
+      "id": "event-12",
+      "type": "tool",
+      "startedAt": "2026-11-01T19:01:15.437Z",
+      "durationMs": 1.659790999998222,
+      "outcome": "ok",
+      "toolCallId": "tool-6",
+      "arguments": {
+        "name": "read_lines",
+        "path": "README.md",
+        "startLine": 1,
+        "endLine": 200
+      },
+      "result": {
+        "kind": "read_lines",
+        "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+        "path": "README.md",
+        "lines": [
+          {
+            "line": 1,
+            "text": "# Inventory API source sample"
+          },
+          {
+            "line": 2,
+            "text": ""
+          },
+          {
+            "line": 3,
+            "text": "This source sample models two read endpoints for warehouse inventory:"
+          },
+          {
+            "line": 4,
+            "text": ""
+          },
+          {
+            "line": 5,
+            "text": "- `GET /items/:id` returns item details."
+          },
+          {
+            "line": 6,
+            "text": "- `GET /items/:id/availability` returns the current quantity."
+          },
+          {
+            "line": 7,
+            "text": ""
+          },
+          {
+            "line": 8,
+            "text": "Inventory records belong to tenants. An authenticated user may read inventory only within their own tenant, regardless of whether another item's ID is known."
+          },
+          {
+            "line": 9,
+            "text": ""
+          },
+          {
+            "line": 10,
+            "text": "The hosting HTTP adapter authenticates the caller and supplies a trusted `principal` containing their user and tenant IDs. Request parameters remain caller-controlled. Authentication itself is outside this sample; the principal is not populated from request parameters or an unverified token."
+          },
+          {
+            "line": 11,
+            "text": ""
+          },
+          {
+            "line": 12,
+            "text": "Entry points are in `src/http.ts`. Application queries and the in-memory repository represent the application and persistence boundaries. Responses use HTTP-style status codes, but no server or database is required. The repository is initialized with rows by its caller; no external service is contacted."
+          }
+        ],
+        "truncated": false,
+        "nextStartLine": null
+      }
+    },
+    {
+      "id": "event-13",
+      "type": "model",
+      "startedAt": "2026-11-01T19:01:15.440Z",
+      "durationMs": 9210.531709000003,
+      "outcome": "ok",
+      "actualModel": "gpt-6-luna",
+      "action": {
+        "rationale": "The documentation explicitly requires tenant-scoped reads and states that route parameters remain caller-controlled, while source shows availability lookup is unscoped. No source-level control compensates for this query behavior; the authenticated principal is trusted but ignored by that query.",
+        "basedOnToolCallIds": [
+          "tool-2",
+          "tool-3",
+          "tool-4",
+          "tool-5",
+          "tool-6"
+        ],
+        "candidates": [
+          {
+            "id": "tenant-availability-bypass",
+            "claim": "An authenticated user can likely retrieve another tenant's inventory quantity through GET /items/:id/availability by supplying that item's ID; the availability query ignores the principal and performs a global ID lookup.",
+            "rationale": "The endpoint forwards the caller's ID to getAvailability; that query explicitly names the principal parameter as unused and calls findById, whose repository implementation matches only the ID. It returns the item's quantity. In contrast, the sibling details query uses findForTenant. The README states users may read only their own tenant's inventory regardless of whether another item's ID is known, and says route parameters are caller-controlled.",
+            "supportingEvidence": [
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/http.ts",
+                "startLine": 24,
+                "endLine": 35,
+                "toolCallId": "tool-2"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/queries.ts",
+                "startLine": 6,
+                "endLine": 17,
+                "toolCallId": "tool-3"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "src/repository.ts",
+                "startLine": 7,
+                "endLine": 12,
+                "toolCallId": "tool-4"
+              },
+              {
+                "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+                "path": "README.md",
+                "startLine": 8,
+                "endLine": 10,
+                "toolCallId": "tool-6"
+              }
+            ],
+            "contradictoryEvidence": [],
+            "uncertainties": [
+              "No runtime tests or server adapter are included, so actual deployment behavior is unverified.",
+              "The hosting adapter is documented as supplying a trusted authenticated principal, but that adapter is outside this snapshot."
+            ],
+            "priorityReason": "High-confidence authorization asymmetry with direct cross-tenant data exposure; the returned quantity is sensitive inventory information and violates the documented tenant boundary.",
+            "nextChecks": [
+              "Add a test showing a principal from tenant A receives not-found for an item owned by tenant B on both endpoints.",
+              "Scope the availability lookup by principal.tenantId, matching getItem/findForTenant behavior.",
+              "Verify the deployed adapter uses these query functions without a separate item-level authorization control."
+            ]
+          }
+        ],
+        "scopeAndLimitations": [
+          "Inspection was limited to the five listed files in this snapshot; no runtime behavior was executed.",
+          "The authentication adapter and deployment wiring are outside the snapshot. The issue concerns authorization after the adapter supplies the trusted principal.",
+          "No other credible candidate was identified in the inspected source."
+        ],
+        "name": "finish"
+      }
+    }
+  ],
+  "usage": {
+    "modelCalls": 7,
+    "toolCalls": 6,
+    "toolResponseBytes": 6699,
+    "elapsedMs": 27009.866084,
+    "inputTokens": 28066,
+    "outputTokens": 1786,
+    "tokenUsageComplete": true
+  }
+}

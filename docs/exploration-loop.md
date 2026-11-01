@@ -49,6 +49,8 @@ An inspection action can include a complete provisional candidate replacement. `
 
 Candidate references must use the current snapshot, a known inspection call, and source lines actually returned by that call. A directory listing is not source evidence. At finish, the application validates counts and references, then rechecks the cited snapshot files for changes. These integrity checks do not establish that the model's security interpretation is correct.
 
+The model-facing evidence schema asks for a tool-call ID, path, and line range. The adapter binds the snapshot ID from trusted run context before application validation; the model does not reproduce that opaque identifier. Persisted candidates and reports still contain the full identity. This distinction was introduced after a [recorded evaluation failure](./experiments/milestone-1.md) where a correct security hypothesis was rejected because one generated snapshot ID contained a typo.
+
 ## Limits and failure behavior
 
 The application counts dispatched model attempts and inspection invocations, including failed or denied ones. SDK retries are disabled. Invalid inspection arguments return bounded errors for the model to reconsider. Invalid action structure, unknown causal IDs, or invalid candidate evidence terminate the run without a repair loop. A final `finish` is a control action, not an inspection invocation.

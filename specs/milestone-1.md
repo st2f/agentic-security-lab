@@ -1,5 +1,7 @@
 # Milestone 1 | Iterative, model-directed repository exploration → prioritized risk hypotheses → report
 
+Status: the six steps are implemented and demonstrated on the controlled fixture. The [experiment record](../docs/experiments/milestone-1.md) retains the targeted and open results, the initial failed delivery, its focused fix, and the limits of the evaluation.
+
 |  | Minimum scope |
 | --- | --- |
 | Inputs | Local repository snapshot, optional investigation question, explicit investigation budget |

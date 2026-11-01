@@ -1,0 +1,48 @@
+{
+  "snapshotId": "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0",
+  "commit": "76cdccf307e7a020dc91be21ae53b6c8a1cace2a",
+  "subtree": "fixtures/inventory-api",
+  "policy": {
+    "version": 1,
+    "maxFiles": 10000,
+    "maxFileBytes": 1048576,
+    "maxTotalBytes": 33554432,
+    "excludedDirectories": [
+      ".git",
+      "node_modules",
+      "dist",
+      "build",
+      "coverage",
+      ".next",
+      "priv",
+      "private",
+      ".aws",
+      ".ssh",
+      ".codex",
+      ".agents"
+    ]
+  },
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "efd6cd1fa821b546ba6b029bbc0f3483081451b4c1bf58aaadfbab377d570da9"
+    },
+    {
+      "path": "src/http.ts",
+      "sha256": "9b7a221fb8491ad23266a7bfc83aa01d7c97ef2c32b96020035c7b9adbca5858"
+    },
+    {
+      "path": "src/model.ts",
+      "sha256": "46de94b1a421cc349882286f0f57d95a8722d71e0b8913a552f972b428b05a40"
+    },
+    {
+      "path": "src/queries.ts",
+      "sha256": "c171867f922ac9dfed7e46ac83804da94796dd7d8049620efcbe7888fe665662"
+    },
+    {
+      "path": "src/repository.ts",
+      "sha256": "ef30b3c47a3e290f9f3604952a8676bc716cb5a09aa3f2d1c996d8e663fd313c"
+    }
+  ],
+  "skipped": []
+}

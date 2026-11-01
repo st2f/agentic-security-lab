@@ -3,3 +3,5 @@ priv/
 .env*
 package-lock.json
 AGENTS.md
+# Preserve archived source hashes, tool output, and report bytes.
+docs/experiments/runs/
