@@ -1,7 +1,11 @@
 import OpenAI from "openai";
 import { zodResponsesFunction } from "openai/helpers/zod";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
-import { actionSchemas, ModelRequestError } from "../investigation/contract.ts";
+import {
+  bindModelAction,
+  modelActionSchemas,
+  ModelRequestError,
+} from "../investigation/contract.ts";
 import type { RequestAction } from "../investigation/contract.ts";
 
 const descriptions = {
@@ -14,7 +18,7 @@ const descriptions = {
   finish:
     "Submit the final prioritized hypotheses and scope limitations. An empty list is valid. No runtime verification is performed.",
 };
-const tools = Object.entries(actionSchemas).map(([name, parameters]) =>
+const tools = Object.entries(modelActionSchemas).map(([name, parameters]) =>
   zodResponsesFunction({
     name,
     parameters,
@@ -34,7 +38,8 @@ any other checkpoint replaces the whole list. You may add, reprioritize, merge, 
 Checkpoint evidence must already have been returned in earlier calls, not the action being requested.
 Each candidate needs a specific claim, priority rationale, and precise supporting source lines.
 Check protective controls and contradictory evidence before making an accusation.
-Use only snapshotId/path/line ranges actually returned by a cited toolCallId; listing a path is not code evidence.
+Use only paths and line ranges actually returned by a cited toolCallId; listing a path is not code evidence.
+The application supplies the snapshot identity on every evidence reference; do not copy or invent a snapshotId field.
 Trace relevant relationships across entry points, queries, security checks, and persistence where useful.
 Findings are hypotheses supported by source, not proof of runtime behavior or exploitability.
 State uncertainties and suggested next checks. Do not fill a candidate quota or invent weaknesses.
@@ -115,7 +120,10 @@ export function createOpenAIModel(options: {
     let action: unknown = null;
     if (call) {
       try {
-        action = { ...JSON.parse(call.arguments), name: call.name };
+        action = bindModelAction(
+          { ...JSON.parse(call.arguments), name: call.name },
+          input.snapshotId,
+        );
       } catch {
         /* Invalid output is handled by the application. */
       }

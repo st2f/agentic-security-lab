@@ -64,6 +64,61 @@ export const actionSchema = z.discriminatedUnion("name", [
 ]);
 export type Action = z.infer<typeof actionSchema>;
 
+// The model chooses evidence; the application owns the snapshot identity.
+const modelEvidenceSchema = evidenceSchema.omit({ snapshotId: true });
+const modelCandidateSchema = candidateSchema.extend({
+  supportingEvidence: z.array(modelEvidenceSchema).min(1).max(20),
+  contradictoryEvidence: z
+    .array(
+      z.strictObject({ reference: modelEvidenceSchema, explanation: text }),
+    )
+    .max(20),
+});
+const modelCheckpoint = z.array(modelCandidateSchema).max(20).nullable();
+export const modelActionSchemas = {
+  list_files: actionSchemas.list_files.extend({ checkpoint: modelCheckpoint }),
+  search_text: actionSchemas.search_text.extend({
+    checkpoint: modelCheckpoint,
+  }),
+  read_lines: actionSchemas.read_lines.extend({ checkpoint: modelCheckpoint }),
+  finish: actionSchemas.finish.extend({
+    candidates: z.array(modelCandidateSchema).max(10),
+  }),
+};
+const modelActionSchema = z.discriminatedUnion("name", [
+  modelActionSchemas.list_files.extend({ name: z.literal("list_files") }),
+  modelActionSchemas.search_text.extend({ name: z.literal("search_text") }),
+  modelActionSchemas.read_lines.extend({ name: z.literal("read_lines") }),
+  modelActionSchemas.finish.extend({ name: z.literal("finish") }),
+]);
+
+export function bindModelAction(
+  raw: unknown,
+  snapshotId: string,
+): Action | null {
+  const parsed = modelActionSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const bind = (
+    candidate: z.infer<typeof modelCandidateSchema>,
+  ): Candidate => ({
+    ...candidate,
+    supportingEvidence: candidate.supportingEvidence.map((reference) => ({
+      ...reference,
+      snapshotId,
+    })),
+    contradictoryEvidence: candidate.contradictoryEvidence.map((entry) => ({
+      ...entry,
+      reference: { ...entry.reference, snapshotId },
+    })),
+  });
+  const action = parsed.data;
+  return actionSchema.parse(
+    action.name === "finish"
+      ? { ...action, candidates: action.candidates.map(bind) }
+      : { ...action, checkpoint: action.checkpoint?.map(bind) ?? null },
+  );
+}
+
 export const limitsSchema = z.strictObject({
   modelCalls: z.number().int().min(1).max(100),
   toolCalls: z.number().int().min(1).max(1000),

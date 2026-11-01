@@ -5,6 +5,10 @@ import {
   ModelRequestError,
 } from "../src/investigation/contract.ts";
 import { createOpenAIModel } from "../src/models/openai.ts";
+import {
+  bindModelAction,
+  modelActionSchemas,
+} from "../src/investigation/contract.ts";
 
 test("OpenAI adapter preserves reasoning and function output correlation across requests", async () => {
   const bodies: Record<string, unknown>[] = [];
@@ -133,4 +137,83 @@ test("provider failures are not retried and diagnostics omit provider payloads",
       error.message === "Model provider returned HTTP 429",
   );
   assert.equal(calls, 1);
+});
+
+test("snapshot identity is supplied from run context for final and checkpoint references", () => {
+  const reference = {
+    path: "query.ts",
+    startLine: 1,
+    endLine: 2,
+    toolCallId: "tool-1",
+  };
+  const candidate = {
+    id: "candidate-1",
+    claim: "A lookup may lack tenant scoping.",
+    rationale: "Only the ID is supplied.",
+    supportingEvidence: [reference],
+    contradictoryEvidence: [
+      { reference, explanation: "The callee might enforce it." },
+    ],
+    uncertainties: ["Callee not inspected."],
+    priorityReason: "Possible cross-tenant disclosure.",
+    nextChecks: ["Read callee."],
+  };
+  const snapshotId =
+    "8107b80d6ea834ab142df53f56ec7157ce4149e7b12544cc4d2b8508e008d8d0";
+  const finish = {
+    name: "finish",
+    rationale: "Report hypothesis.",
+    basedOnToolCallIds: ["tool-1"],
+    candidates: [candidate],
+    scopeAndLimitations: [],
+  };
+  const final = bindModelAction(finish, snapshotId);
+  assert.equal(final?.name, "finish");
+  if (final?.name !== "finish") return;
+  assert.equal(
+    final.candidates[0]!.supportingEvidence[0]!.snapshotId,
+    snapshotId,
+  );
+  assert.equal(
+    final.candidates[0]!.contradictoryEvidence[0]!.reference.snapshotId,
+    snapshotId,
+  );
+  const update = bindModelAction(
+    {
+      name: "read_lines",
+      path: "query.ts",
+      startLine: 1,
+      endLine: 2,
+      rationale: "Follow evidence.",
+      basedOnToolCallIds: ["tool-1"],
+      checkpoint: [candidate],
+    },
+    snapshotId,
+  );
+  if (update?.name !== "read_lines")
+    assert.fail("Expected an inspection checkpoint");
+  assert.equal(
+    update.checkpoint?.[0]?.supportingEvidence[0]?.snapshotId,
+    snapshotId,
+  );
+  const typo = {
+    ...candidate,
+    supportingEvidence: [{ ...reference, snapshotId: snapshotId.slice(0, 60) }],
+  };
+  const { name: _name, ...finishArguments } = finish;
+  assert.equal(
+    modelActionSchemas.finish.safeParse(finishArguments).success,
+    true,
+  );
+  assert.equal(
+    modelActionSchemas.finish.safeParse({
+      ...finishArguments,
+      candidates: [typo],
+    }).success,
+    false,
+  );
+  assert.equal(
+    bindModelAction({ ...finish, candidates: [typo] }, snapshotId),
+    null,
+  );
 });
