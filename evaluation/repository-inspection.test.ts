@@ -15,17 +15,17 @@ import test from "node:test";
 import type { TestContext } from "node:test";
 import { promisify } from "node:util";
 import {
-  createRepositoryInspector,
+  RepositoryInspector,
   OutputBudgetError,
   serializedBytes,
   SnapshotChangedError,
-} from "../src/repository/inspection.ts";
+} from "../src/infrastructure/repository/RepositoryInspector.ts";
 import {
   digest,
   prepareSnapshot,
   snapshotPolicy,
-} from "../src/repository/snapshot.ts";
-import type { Snapshot } from "../src/repository/snapshot.ts";
+} from "../src/infrastructure/repository/snapshot.ts";
+import type { Snapshot } from "../src/infrastructure/repository/snapshot.ts";
 
 const run = promisify(execFile);
 
@@ -54,7 +54,7 @@ async function sample(
     files,
     skipped: [],
   };
-  return { root, snapshot, inspector: createRepositoryInspector(snapshot) };
+  return { root, snapshot, inspector: new RepositoryInspector(snapshot) };
 }
 
 test("snapshot exports committed subtree files and records exclusions without answer-key leakage", async (t) => {
@@ -379,4 +379,28 @@ test("modified, deleted, or symlink-replaced snapshot files fail closed before r
       mode,
     );
   }
+});
+
+test("inspector access and integrity checks use a copied manifest", async (t) => {
+  const { root, snapshot, inspector } = await sample(t, {
+    "src/item.ts": "original\n",
+  });
+  // Rewriting caller-owned metadata cannot authorize another file or a changed hash.
+  await writeFile(path.join(root, "outside.ts"), "private\n");
+  snapshot.files = [
+    ...snapshot.files,
+    { path: "outside.ts", sha256: digest("private\n") },
+  ];
+  snapshot.files[0]!.sha256 = digest("changed\n");
+  const listing = await inspector.execute("list_files", {});
+  assert.equal(listing.kind, "list_files");
+  if (listing.kind === "list_files")
+    assert.deepEqual(listing.files, ["src/item.ts"]);
+  const denied = await inspector.execute("read_lines", { path: "outside.ts" });
+  assert.equal(denied.kind, "error");
+  await writeFile(path.join(root, "src/item.ts"), "changed\n");
+  await assert.rejects(
+    inspector.execute("read_lines", { path: "src/item.ts" }),
+    SnapshotChangedError,
+  );
 });

@@ -1,8 +1,8 @@
-# Fixture evaluation
+# Inventory fixture: evaluator reference
 
-This directory contains evaluator-only expectations and executable checks. It must not be included in an investigating agent's accessible source root.
+This document contains evaluator-only expectations for the inventory experiment. Executable checks live in `evaluation/`. Both must remain outside the investigating model's accessible source root.
 
-For the inventory experiment, expose only `fixtures/inventory-api/`, never the whole lab repository. Prepare a snapshot from that subtree when snapshot tooling is available. The fixture README specifies the business rule and trust boundary; it does not identify the affected endpoint.
+For the inventory experiment, expose only `fixtures/inventory-api/`, never the whole lab repository. Prepare a snapshot from that subtree. The [fixture README](../../fixtures/inventory-api/README.md) specifies the business rule and trust boundary; it does not identify the affected endpoint.
 
 Run the behavior checks locally with Node.js 24:
 

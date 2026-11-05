@@ -8,6 +8,10 @@ import {
   validRelativePath,
 } from "./snapshot.ts";
 import type { Snapshot } from "./snapshot.ts";
+import type {
+  InspectionLine as SourceLine,
+  InspectionResult as Result,
+} from "../../investigation/contracts.ts";
 
 export class SnapshotChangedError extends Error {
   constructor() {
@@ -23,32 +27,7 @@ export class OutputBudgetError extends Error {
 
 class InputError extends Error {}
 
-type SourceLine = { line: number; text: string };
 type Match = SourceLine & { path: string };
-type Result =
-  | {
-      kind: "list_files";
-      snapshotId: string;
-      files: string[];
-      truncated: boolean;
-      nextOffset: number | null;
-    }
-  | {
-      kind: "search_text";
-      snapshotId: string;
-      matches: Match[];
-      truncated: boolean;
-      nextOffset: number | null;
-    }
-  | {
-      kind: "read_lines";
-      snapshotId: string;
-      path: string;
-      lines: SourceLine[];
-      truncated: boolean;
-      nextStartLine: number | null;
-    }
-  | { kind: "error"; code: "invalid_request"; message: string };
 
 export function serializedBytes(result: unknown): number {
   return Buffer.byteLength(JSON.stringify(result), "utf8");
@@ -112,38 +91,45 @@ function lines(text: string): SourceLine[] {
 }
 
 /** One instance is scoped to one prepared snapshot; caller owns run-wide accounting. */
-export function createRepositoryInspector(
-  snapshot: Snapshot,
-  maxResponseBytes = 16_384,
-) {
-  if (
-    !Number.isSafeInteger(maxResponseBytes) ||
-    maxResponseBytes < 256 ||
-    maxResponseBytes > 16_384
-  ) {
-    throw new Error("Response allowance must be between 256 and 16384 bytes");
-  }
-  // Copy the trusted manifest so later caller mutations cannot broaden access.
-  const manifest = new Map(
-    snapshot.files.map((file) => [file.path, file.sha256]),
-  );
-  const paths = [...manifest.keys()]
-    .filter((file) => validRelativePath(file) && !excludedPath(file))
-    .sort();
-  const root = path.resolve(snapshot.root);
+export class RepositoryInspector {
+  private readonly snapshot: Snapshot;
+  private readonly maxResponseBytes: number;
+  private readonly manifest: Map<string, string>;
+  private readonly paths: string[];
+  private readonly root: string;
 
-  async function readVerified(
+  constructor(snapshot: Snapshot, maxResponseBytes = 16_384) {
+    this.snapshot = snapshot;
+    this.maxResponseBytes = maxResponseBytes;
+    if (
+      !Number.isSafeInteger(maxResponseBytes) ||
+      maxResponseBytes < 256 ||
+      maxResponseBytes > 16_384
+    ) {
+      throw new Error("Response allowance must be between 256 and 16384 bytes");
+    }
+    // Copy the trusted manifest so later caller mutations cannot broaden access.
+    this.manifest = new Map(
+      snapshot.files.map((file) => [file.path, file.sha256]),
+    );
+    this.paths = [...this.manifest.keys()]
+      .filter((file) => validRelativePath(file) && !excludedPath(file))
+      .sort();
+    this.root = path.resolve(snapshot.root);
+  }
+
+  private async readVerified(
     file: string,
     signal?: AbortSignal,
   ): Promise<SourceLine[]> {
     signal?.throwIfAborted();
-    if (!paths.includes(file))
+    if (!this.paths.includes(file))
       throw new InputError("File is not in the accessible manifest");
     try {
-      const rootInfo = await lstat(root);
+      const rootInfo = await lstat(this.root);
       if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory())
         throw new SnapshotChangedError();
-      let current = root;
+      let current = this.root;
       const segments = file.split("/");
       for (const [index, segment] of segments.entries()) {
         current = path.join(current, segment);
@@ -157,13 +143,13 @@ export function createRepositoryInspector(
           throw new SnapshotChangedError();
         }
       }
-      const canonicalRoot = await realpath(root);
+      const canonicalRoot = await realpath(this.root);
       const canonicalFile = await realpath(current);
       if (!canonicalFile.startsWith(canonicalRoot + path.sep))
         throw new SnapshotChangedError();
       const content = await readFile(canonicalFile, { signal });
       signal?.throwIfAborted();
-      if (digest(content) !== manifest.get(file))
+      if (digest(content) !== this.manifest.get(file))
         throw new SnapshotChangedError();
       return lines(decodeText(content));
     } catch (error) {
@@ -173,7 +159,7 @@ export function createRepositoryInspector(
     }
   }
 
-  function page<T>(
+  private page<T>(
     items: T[],
     limit: number,
     bytes: number,
@@ -195,16 +181,16 @@ export function createRepositoryInspector(
     return result;
   }
 
-  async function execute(
+  async execute(
     name: string,
     input: unknown,
-    remainingBytes = maxResponseBytes,
+    remainingBytes = this.maxResponseBytes,
     signal?: AbortSignal,
   ): Promise<Result> {
     signal?.throwIfAborted();
     if (!Number.isSafeInteger(remainingBytes) || remainingBytes < 256)
       throw new OutputBudgetError();
-    const bytes = Math.min(remainingBytes, maxResponseBytes);
+    const bytes = Math.min(remainingBytes, this.maxResponseBytes);
     try {
       if (name === "list_files" || name === "search_text") {
         const args = argumentsFor(
@@ -216,23 +202,28 @@ export function createRepositoryInspector(
         const directory = relative(args.directory, true);
         if (
           directory !== "." &&
-          !paths.some((file) => file.startsWith(directory + "/"))
+          !this.paths.some((file) => file.startsWith(directory + "/"))
         ) {
           throw new InputError("Directory is not in the accessible manifest");
         }
         const offset = integer(args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
         const limit = integer(args.limit, 50, 1, 100);
-        const files = paths.filter(
+        const files = this.paths.filter(
           (file) => directory === "." || file.startsWith(directory + "/"),
         );
         if (name === "list_files") {
-          return page(files.slice(offset), limit, bytes, (selected, more) => ({
-            kind: "list_files",
-            snapshotId: snapshot.snapshotId,
-            files: selected,
-            truncated: more,
-            nextOffset: more ? offset + selected.length : null,
-          }));
+          return this.page(
+            files.slice(offset),
+            limit,
+            bytes,
+            (selected, more) => ({
+              kind: "list_files",
+              snapshotId: this.snapshot.snapshotId,
+              files: selected,
+              truncated: more,
+              nextOffset: more ? offset + selected.length : null,
+            }),
+          );
         }
         if (
           typeof args.query !== "string" ||
@@ -247,7 +238,7 @@ export function createRepositoryInspector(
         const matches: Match[] = [];
         let skippedMatches = 0;
         search: for (const file of files) {
-          for (const line of await readVerified(file, signal)) {
+          for (const line of await this.readVerified(file, signal)) {
             if (!line.text.includes(args.query)) continue;
             if (skippedMatches < offset) {
               skippedMatches++;
@@ -258,9 +249,9 @@ export function createRepositoryInspector(
             if (matches.length > limit) break search;
           }
         }
-        return page(matches, limit, bytes, (selected, more) => ({
+        return this.page(matches, limit, bytes, (selected, more) => ({
           kind: "search_text",
-          snapshotId: snapshot.snapshotId,
+          snapshotId: this.snapshot.snapshotId,
           matches: selected,
           truncated: more,
           nextOffset: more ? offset + selected.length : null,
@@ -278,16 +269,16 @@ export function createRepositoryInspector(
         );
         if (end - start >= 200)
           throw new InputError("Read at most 200 lines per request");
-        const content = await readVerified(file, signal);
+        const content = await this.readVerified(file, signal);
         if (start > content.length && !(start === 1 && !content.length))
           throw new InputError("Start line is past the end of the file");
-        return page(
+        return this.page(
           content.slice(start - 1, end),
           200,
           bytes,
           (selected, more) => ({
             kind: "read_lines",
-            snapshotId: snapshot.snapshotId,
+            snapshotId: this.snapshot.snapshotId,
             path: file,
             lines: selected,
             truncated: more,
@@ -307,6 +298,4 @@ export function createRepositoryInspector(
       return result;
     }
   }
-
-  return { execute };
 }

@@ -24,6 +24,43 @@ export const candidateSchema = z.strictObject({
 export type Evidence = z.infer<typeof evidenceSchema>;
 export type Candidate = z.infer<typeof candidateSchema>;
 
+export const inspectionLineSchema = z.strictObject({
+  line: z.number().int().positive(),
+  text: z.string().refine((value) => !value.includes("\n")),
+});
+export const inspectionResultSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("read_lines"),
+    snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
+    path: text,
+    lines: z.array(inspectionLineSchema).max(200),
+    truncated: z.boolean(),
+    nextStartLine: z.number().int().positive().nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("search_text"),
+    snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
+    matches: z.array(inspectionLineSchema.extend({ path: text })).max(100),
+    truncated: z.boolean(),
+    nextOffset: z.number().int().nonnegative().nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("list_files"),
+    snapshotId: z.string().regex(/^[a-f0-9]{64}$/),
+    files: z.array(text).max(100),
+    truncated: z.boolean(),
+    nextOffset: z.number().int().nonnegative().nullable(),
+  }),
+  z.strictObject({
+    kind: z.literal("error"),
+    code: z.literal("invalid_request"),
+    message: text,
+  }),
+]);
+
+export type InspectionLine = z.infer<typeof inspectionLineSchema>;
+export type InspectionResult = z.infer<typeof inspectionResultSchema>;
+
 const meta = {
   rationale: text,
   basedOnToolCallIds: z.array(text).max(40),
@@ -189,21 +226,32 @@ export type RunResult = {
   };
 };
 
+export type JsonValue =
+  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
+
+/** Provider wire data only: no SDK objects, credentials, or execution resources. */
+export const conversationContinuationSchema = z.strictObject({
+  history: z.array(z.record(z.string(), z.json())),
+  pendingCallId: text.nullable(),
+});
+export type ConversationContinuation = z.infer<
+  typeof conversationContinuationSchema
+>;
+
 // A narrow call boundary for deterministic testing, not a provider routing system.
 export type ModelInput = {
   snapshotId: string;
   config: RunConfig;
   observation: { toolCallId: string; result: unknown } | null;
+  conversation: ConversationContinuation;
 };
 export type ModelReply = {
   action: unknown;
+  conversation: ConversationContinuation;
   actualModel?: string;
   usage?: { inputTokens: number; outputTokens: number };
 };
-export type RequestAction = (
-  input: ModelInput,
-  signal: AbortSignal,
-) => Promise<ModelReply>;
 
 export class ModelRequestError extends Error {
   constructor(status?: number) {

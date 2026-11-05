@@ -1,5 +1,7 @@
 # Project Brief: Agentic Security Investigation Lab
 
+This brief defines the application use case, learning objectives and development milestones. The [architecture](./architecture.md) describes how the current implementation realizes them.
+
 ## 1. Purpose
 
 Build a small, extensible AI-assisted security investigation system to learn agent orchestration through practical experiments.
@@ -9,7 +11,7 @@ The primary goal is learning, not delivering a production-ready security scanner
 The project combines three learning objectives:
 
 - **Agent orchestration:** Understand model-directed exploration, tool calling, state management, multi-model coordination, verification loops, and resource constraints.
-- **Security testing:** Learn established security testing techniques and tools, with particular attention to the terminology and concepts in the ISTQB Certified Tester Security Test Engineer (CT-STE) syllabus.
+- **Security testing:** Learn established security testing techniques and tools.
 - **TypeScript backend engineering:** Practice Node.js, TypeScript, modular architecture, testing, and integration with external tools and APIs.
 
 ## 2. Investigation Scope
@@ -175,7 +177,7 @@ Distinguish between multiple model configurations and multiple autonomous agents
 
 Model/provider abstraction, parallel workers, and automatic routing should only be implemented when justified by a concrete milestone.
 
-## 7. Security Testing Tools and ISTQB
+## 7. Security Testing Tools
 
 The project should progressively explore established security testing techniques and tools, potentially including:
 
@@ -190,8 +192,6 @@ The project should progressively explore established security testing techniques
 These are candidates, not mandatory dependencies.
 
 Maintain a distinction between security testing techniques, tools, and orchestration capabilities.
-
-Where useful, document experiments using the exact terminology of the relevant ISTQB Certified Tester Security Test Engineer (CT-STE) syllabus version. Verify the syllabus terminology before treating it as an official learning objective.
 
 The project may eventually integrate deterministic scanner results with model-directed investigation and verification.
 
@@ -211,10 +211,6 @@ Suggested progression:
 | 6 | Iterative verification and reassessment with bounded rounds |
 
 This is a conceptual progression, not a mandatory implementation sequence. Adjust it when an experiment demonstrates a better order.
-
-Milestone 1 must include a bounded exploration loop in which the model selects follow-up repository search or file-reading actions based on previously discovered evidence. Summarizing a predetermined collection of files does not satisfy this milestone. Acceptance requires an inspectable action trace demonstrating at least one evidence-driven follow-up action, alongside the resulting hypotheses and source references. This exploration loop is distinct from the later verification and reassessment rounds in milestone 6.
-
-Do not build the complete future architecture in milestone 1.
 
 ## 9. Testing and Evaluation
 

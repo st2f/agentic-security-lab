@@ -1,19 +1,33 @@
+import type { ActionModel } from "../src/investigation/ActionModel.ts";
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { TestContext } from "node:test";
-import { defaultLimits } from "../src/investigation/contract.ts";
+import { configSchema, defaultLimits } from "../src/investigation/contracts.ts";
+import { InvestigationRunner } from "../src/investigation/InvestigationRunner.ts";
+import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
+import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
+import { initialInvestigationState } from "../src/investigation/state.ts";
+import type { InvestigationState } from "../src/investigation/state.ts";
+import type { InvestigationContext } from "../src/investigation/context.ts";
+import { ExplorationWorkflow } from "../src/workflows/ExplorationWorkflow.ts";
+import { ReportValidator } from "../src/reporting/ReportValidator.ts";
+import { RepositoryInspector } from "../src/infrastructure/repository/RepositoryInspector.ts";
 import type {
   Action,
   Candidate,
+  ConversationContinuation,
   ModelInput,
-  RequestAction,
-} from "../src/investigation/contract.ts";
-import { explore } from "../src/orchestration/explore.ts";
-import { digest } from "../src/repository/snapshot.ts";
-import type { Snapshot } from "../src/repository/snapshot.ts";
+} from "../src/investigation/contracts.ts";
+import {
+  createInvestigationWithModel,
+  createInvestigation,
+} from "../src/composition.ts";
+import { digest } from "../src/infrastructure/repository/snapshot.ts";
+import type { Snapshot } from "../src/infrastructure/repository/snapshot.ts";
 
 async function source(t: TestContext) {
   const root = await mkdtemp(path.join(os.tmpdir(), "exploration-"));
@@ -75,13 +89,177 @@ function candidate(snapshot: Snapshot): Candidate {
 }
 function scripted(
   steps: ((input: ModelInput) => unknown | Promise<unknown>)[],
-): RequestAction {
+): ActionModel {
   let index = 0;
-  return async (input) => ({
-    action: await steps[index++]!(input),
-    usage: { inputTokens: 10, outputTokens: 5 },
-  });
+  return {
+    requestAction: async (input) => ({
+      action: await steps[index++]!(input),
+      conversation: input.conversation,
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }),
+  };
 }
+
+test("assembly is inert and execution owns resources and permits only one run", async (t) => {
+  const snapshot = await source(t);
+  const schedule = t.mock.method(globalThis, "setTimeout");
+  let calls = 0;
+  const investigation = createInvestigationWithModel(
+    snapshot,
+    {},
+    {
+      async requestAction(input) {
+        calls++;
+        return { action: finish(), conversation: input.conversation };
+      },
+    },
+  );
+  assert.equal(calls, 0);
+  assert.equal(schedule.mock.callCount(), 0);
+
+  const controller = new AbortController();
+  const result = await investigation.run(controller.signal);
+  assert.equal(result.completion, "completed");
+  assert.equal(calls, 1);
+  assert.ok(schedule.mock.callCount() > 0);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  await assert.rejects(investigation.run(), /only run once/);
+  assert.equal(calls, 1);
+});
+
+test("unexpected workflow failure produces an incomplete result and releases execution resources", async (t) => {
+  const snapshot = await source(t);
+  const dispose = t.mock.method(ExecutionScope.prototype, "dispose");
+  const runner = new InvestigationRunner(
+    initialInvestigationState({
+      runId: "workflow-failure",
+      snapshotId: snapshot.snapshotId,
+    }),
+    {
+      async run() {
+        throw new Error("workflow failed");
+      },
+    },
+    {
+      snapshot,
+      config: configSchema.parse({}),
+      model: scripted([]),
+      inspector: new RepositoryInspector(snapshot),
+    },
+  );
+  const controller = new AbortController();
+  const result = await runner.run(controller.signal);
+  assert.equal(result.completion, "incomplete");
+  assert.equal(result.termination.reason, "execution_error");
+  assert.equal(result.usage.modelCalls, 0);
+  assert.equal(dispose.mock.callCount(), 1);
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+});
+
+test("unexpected graph failure preserves committed evidence and the latest validated checkpoint", async (t) => {
+  const snapshot = await source(t);
+  const saved = candidate(snapshot);
+  const operations = new InvestigationOperations();
+  const model = scripted([() => read(), () => read([saved], ["tool-1"])]);
+  const invokeModel = t.mock.method(model, "requestAction");
+  const requestAction = operations.requestAction.bind(operations);
+  t.mock.method(
+    operations,
+    "requestAction",
+    async (state: InvestigationState, context: InvestigationContext) => {
+      if (state.usage.modelCalls === 3)
+        throw new Error("unexpected node failure");
+      return requestAction(state, context);
+    },
+  );
+  const runner = new InvestigationRunner(
+    initialInvestigationState({
+      runId: "committed-failure",
+      snapshotId: snapshot.snapshotId,
+    }),
+    new ExplorationWorkflow(operations),
+    {
+      snapshot,
+      config: configSchema.parse({}),
+      model,
+      inspector: new RepositoryInspector(snapshot),
+    },
+  );
+  const controller = new AbortController();
+  const result = await runner.run(controller.signal);
+  assert.equal(result.termination.reason, "execution_error");
+  assert.equal(result.finalCandidates, null);
+  assert.deepEqual(result.provisionalCandidates, [saved]);
+  assert.equal(result.usage.modelCalls, 3);
+  // The third event is committed preparation, without an external invocation.
+  assert.equal(invokeModel.mock.callCount(), 2);
+  assert.equal(result.usage.inputTokens, 20);
+  assert.equal(result.usage.toolCalls, 2);
+  assert.equal(result.trace.length, 5);
+  assert.equal(result.trace.at(-1)!.outcome, "pending");
+  assert.equal(result.usage.tokenUsageComplete, false);
+  assert.equal(result.trace[1]!.outcome, "ok");
+  assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+  const { root, ...manifest } = snapshot;
+  await new ReportValidator().validate(
+    result,
+    { ...manifest, policy: {} },
+    root,
+  );
+});
+
+test("production composition connects inspection to the adapter with a fresh conversation per run", async (t) => {
+  const snapshot = await source(t);
+  const requests: { input: { type?: string; output?: string }[] }[] = [];
+  const modelOptions: Parameters<typeof createInvestigation>[2] = {
+    apiKey: "test-key-not-a-secret",
+    fetch: async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(JSON.parse(await request.text()));
+      const action = requests.length % 2 === 1 ? read() : finish();
+      const { name, ...args } = action;
+      return new Response(
+        JSON.stringify({
+          id: `response-${requests.length}`,
+          object: "response",
+          created_at: 1,
+          model: "configured-model-version",
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              id: `function-${requests.length}`,
+              call_id: `provider-call-${requests.length}`,
+              name,
+              arguments: JSON.stringify(args),
+              status: "completed",
+            },
+          ],
+          usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    },
+  };
+  for (let run = 0; run < 2; run++) {
+    const result = await createInvestigation(snapshot, {}, modelOptions).run();
+    assert.equal(result.completion, "completed");
+    assert.equal(result.usage.modelCalls, 2);
+    assert.equal(result.usage.toolCalls, 1);
+    assert.equal(requests[run * 2]!.input.length, 1);
+    const observation = requests[run * 2 + 1]!.input.find(
+      (item) => item.type === "function_call_output",
+    );
+    assert.deepEqual(JSON.parse(observation!.output!), {
+      toolCallId: "tool-1",
+      result: result.trace[1]!.result,
+    });
+    assert.equal(
+      (result.trace[1]!.result as { path: string }).path,
+      "query.ts",
+    );
+  }
+});
 
 test("graph follows a prior result and returns source-supported hypotheses with measured usage", async (t) => {
   const snapshot = await source(t);
@@ -112,7 +290,7 @@ test("graph follows a prior result and returns source-supported hypotheses with 
       return finish([item]);
     },
   ]);
-  const result = await explore(snapshot, {}, model);
+  const result = await createInvestigationWithModel(snapshot, {}, model).run();
   assert.equal(result.completion, "completed");
   assert.equal(result.termination.reason, "model_finished");
   assert.equal(result.finalCandidates?.length, 1);
@@ -126,7 +304,11 @@ test("graph follows a prior result and returns source-supported hypotheses with 
 
 test("zero candidates is a completed assessment; absence of a response is incomplete", async (t) => {
   const snapshot = await source(t);
-  const complete = await explore(snapshot, {}, scripted([() => finish()]));
+  const complete = await createInvestigationWithModel(
+    snapshot,
+    {},
+    scripted([() => finish()]),
+  ).run();
   assert.equal(complete.completion, "completed");
   assert.deepEqual(complete.finalCandidates, []);
   assert.ok(
@@ -134,9 +316,15 @@ test("zero candidates is a completed assessment; absence of a response is incomp
       entry.includes("does not establish"),
     ),
   );
-  const incomplete = await explore(snapshot, {}, async () => {
-    throw new Error("provider failed");
-  });
+  const incomplete = await createInvestigationWithModel(
+    snapshot,
+    {},
+    {
+      requestAction: async () => {
+        throw new Error("provider failed");
+      },
+    },
+  ).run();
   assert.equal(incomplete.completion, "incomplete");
   assert.equal(incomplete.finalCandidates, null);
   assert.equal(incomplete.termination.reason, "model_error");
@@ -145,19 +333,19 @@ test("zero candidates is a completed assessment; absence of a response is incomp
 
 test("model/tool limits stop execution and retain only the latest validated checkpoint", async (t) => {
   const snapshot = await source(t);
-  const modelLimited = await explore(
+  const modelLimited = await createInvestigationWithModel(
     snapshot,
     { limits: { ...defaultLimits, modelCalls: 1 } },
     scripted([() => read()]),
-  );
+  ).run();
   assert.equal(modelLimited.termination.limit, "modelCalls");
   assert.equal(modelLimited.usage.modelCalls, 1);
   const saved = candidate(snapshot);
-  const toolLimited = await explore(
+  const toolLimited = await createInvestigationWithModel(
     snapshot,
     { limits: { ...defaultLimits, toolCalls: 1 } },
     scripted([() => read(), () => read([saved], ["tool-1"])]),
-  );
+  ).run();
   assert.equal(toolLimited.termination.limit, "toolCalls");
   assert.equal(toolLimited.usage.toolCalls, 1);
   assert.equal(toolLimited.finalCandidates, null);
@@ -171,7 +359,7 @@ test("candidate replacements preserve revision history while discarded candidate
     ...initial,
     claim: "The repository implementation still needs inspection.",
   };
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     { limits: { ...defaultLimits, modelCalls: 4 } },
     scripted([
@@ -180,7 +368,7 @@ test("candidate replacements preserve revision history while discarded candidate
       () => read([revised], ["tool-1"]),
       () => read([], ["tool-1"]),
     ]),
-  );
+  ).run();
   assert.equal(result.termination.limit, "modelCalls");
   assert.deepEqual(result.provisionalCandidates, []);
   const updates = result.trace.flatMap((entry) =>
@@ -209,23 +397,60 @@ test("application rejects unread evidence, invented causal IDs, and excessive fi
         ]),
     ],
   ]) {
-    const result = await explore(
+    const result = await createInvestigationWithModel(
       snapshot,
       { maxCandidates: 1 },
       scripted(steps),
-    );
+    ).run();
     assert.equal(result.termination.reason, "invalid_model_output");
     assert.equal(result.finalCandidates, null);
   }
 });
 
+test("invalid continuation cannot replace an earlier valid provisional checkpoint", async (t) => {
+  const snapshot = await source(t);
+  const saved = candidate(snapshot);
+  let calls = 0;
+  const result = await createInvestigationWithModel(
+    snapshot,
+    {},
+    {
+      async requestAction(input) {
+        calls++;
+        return {
+          action:
+            calls === 1
+              ? read()
+              : calls === 2
+                ? read([saved], ["tool-1"])
+                : read([]),
+          conversation:
+            calls === 3
+              ? ({
+                  history: [{ callback() {} }],
+                  pendingCallId: null,
+                } as unknown as ConversationContinuation)
+              : input.conversation,
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      },
+    },
+  ).run();
+  assert.equal(result.termination.reason, "model_error");
+  assert.deepEqual(result.provisionalCandidates, [saved]);
+  assert.equal(result.usage.modelCalls, 3);
+  assert.equal(result.usage.toolCalls, 2);
+  assert.equal(result.trace.at(-1)!.outcome, "error");
+  assert.equal("conversation" in result, false);
+});
+
 test("denied tool arguments return observations and do not escape the snapshot", async (t) => {
   const snapshot = await source(t);
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     {},
     scripted([
-      () => ({ ...read(), path: "../evaluation/README.md" }),
+      () => ({ ...read(), path: "../docs/experiments/inventory-fixture.md" }),
       (input) => {
         assert.equal(
           (input.observation?.result as { kind: string }).kind,
@@ -234,7 +459,7 @@ test("denied tool arguments return observations and do not escape the snapshot",
         return finish();
       },
     ]),
-  );
+  ).run();
   assert.equal(result.completion, "completed");
   assert.equal(result.usage.toolCalls, 1);
   assert.equal(result.trace[1]?.outcome, "error");
@@ -242,11 +467,11 @@ test("denied tool arguments return observations and do not escape the snapshot",
 
 test("cumulative response bytes and oversized lines terminate without extra model calls", async (t) => {
   const snapshot = await source(t);
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     { limits: { ...defaultLimits, totalToolResponseBytes: 512 } },
     scripted([() => read(), () => read()]),
-  );
+  ).run();
   assert.equal(result.termination.reason, "budget_exhausted");
   assert.equal(result.termination.limit, "totalToolResponseBytes");
   assert.ok(result.usage.toolResponseBytes <= 512);
@@ -256,14 +481,18 @@ test("cumulative response bytes and oversized lines terminate without extra mode
     ...snapshot,
     files: [{ path: "query.ts", sha256: digest(content) }],
   };
-  const oversized = await explore(updated, {}, scripted([() => read()]));
+  const oversized = await createInvestigationWithModel(
+    updated,
+    {},
+    scripted([() => read()]),
+  ).run();
   assert.equal(oversized.termination.limit, "toolResponseBytes");
   assert.equal(oversized.usage.modelCalls, 1);
 });
 
 test("snapshot mutation after inspection prevents final acceptance", async (t) => {
   const snapshot = await source(t);
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     {},
     scripted([
@@ -273,7 +502,7 @@ test("snapshot mutation after inspection prevents final acceptance", async (t) =
         return finish([candidate(snapshot)]);
       },
     ]),
-  );
+  ).run();
   assert.equal(result.termination.reason, "snapshot_changed");
   assert.equal(result.finalCandidates, null);
 });
@@ -281,14 +510,16 @@ test("snapshot mutation after inspection prevents final acceptance", async (t) =
 test("deadline aborts a noncooperating model and prevents subsequent actions", async (t) => {
   const snapshot = await source(t);
   let signal: AbortSignal | undefined;
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     { limits: { ...defaultLimits, elapsedMs: 30 } },
-    async (_input, currentSignal) => {
-      signal = currentSignal;
-      return new Promise(() => {});
+    {
+      requestAction: async (_input, currentSignal) => {
+        signal = currentSignal;
+        return new Promise(() => {});
+      },
     },
-  );
+  ).run();
   assert.equal(signal?.aborted, true);
   assert.equal(result.termination.limit, "elapsedMs");
   assert.equal(result.usage.toolCalls, 0);
@@ -298,22 +529,22 @@ test("deadline aborts a noncooperating model and prevents subsequent actions", a
 test("user cancellation stops in-flight work and pre-cancelled runs dispatch nothing", async (t) => {
   const snapshot = await source(t);
   const controller = new AbortController();
-  const result = await explore(
+  const result = await createInvestigationWithModel(
     snapshot,
     {},
-    async () => {
-      controller.abort();
-      return new Promise(() => {});
+    {
+      requestAction: async () => {
+        controller.abort();
+        return new Promise(() => {});
+      },
     },
-    controller.signal,
-  );
+  ).run(controller.signal);
   assert.equal(result.termination.reason, "cancelled");
-  const preCancelled = await explore(
+  const preCancelled = await createInvestigationWithModel(
     snapshot,
     {},
     scripted([]),
-    controller.signal,
-  );
+  ).run(controller.signal);
   assert.equal(preCancelled.usage.modelCalls, 0);
   assert.equal(preCancelled.termination.reason, "cancelled");
 });
@@ -321,13 +552,15 @@ test("user cancellation stops in-flight work and pre-cancelled runs dispatch not
 test("invalid configuration fails before dispatch", async (t) => {
   const snapshot = await source(t);
   let calls = 0;
-  await assert.rejects(
-    explore(
+  assert.throws(() =>
+    createInvestigationWithModel(
       snapshot,
       { limits: { ...defaultLimits, modelCalls: 0 } },
-      async () => {
-        calls++;
-        return { action: finish() };
+      {
+        requestAction: async (input) => {
+          calls++;
+          return { action: finish(), conversation: input.conversation };
+        },
       },
     ),
   );

@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
-import { writeSavedReport } from "./reporting/report.ts";
-import { ReportValidationError } from "./reporting/validation.ts";
+import { writeSavedReport } from "./reporting/saved-report.ts";
+import { ReportValidationError } from "./reporting/ReportValidator.ts";
 
 try {
   const { values } = parseArgs({ options: { run: { type: "string" } } });

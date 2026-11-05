@@ -1,3 +1,4 @@
+import type { ActionModel } from "../src/investigation/ActionModel.ts";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -9,23 +10,35 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import type { TestContext } from "node:test";
 import type {
   Action,
   Candidate,
-  RequestAction,
   RunResult,
-} from "../src/investigation/contract.ts";
-import { defaultLimits } from "../src/investigation/contract.ts";
-import { explore } from "../src/orchestration/explore.ts";
-import { digest, snapshotPolicy } from "../src/repository/snapshot.ts";
-import type { Snapshot } from "../src/repository/snapshot.ts";
-import { renderReport, writeSavedReport } from "../src/reporting/report.ts";
+} from "../src/investigation/contracts.ts";
+import { defaultLimits } from "../src/investigation/contracts.ts";
+import { createInvestigationWithModel } from "../src/composition.ts";
+import {
+  initialInvestigationState,
+  projectRunResult,
+} from "../src/investigation/state.ts";
+import type { InvestigationTraceEvent } from "../src/investigation/state.ts";
+import {
+  digest,
+  snapshotPolicy,
+} from "../src/infrastructure/repository/snapshot.ts";
+import type { Snapshot } from "../src/infrastructure/repository/snapshot.ts";
+import { ReportRenderer } from "../src/reporting/ReportRenderer.ts";
+import { writeSavedReport } from "../src/reporting/saved-report.ts";
 import {
   ReportValidationError,
-  validateReportInput,
-} from "../src/reporting/validation.ts";
+  ReportValidator,
+} from "../src/reporting/ReportValidator.ts";
+
+const validator = new ReportValidator();
+const renderer = new ReportRenderer();
 
 async function fixture(
   t: TestContext,
@@ -103,18 +116,75 @@ async function fixture(
   }
   return { directory, root, snapshot, manifest, read, candidate, finish, save };
 }
-function replies(actions: Action[]): RequestAction {
+function replies(actions: Action[]): ActionModel {
   let index = 0;
-  return async () => ({
-    action: actions[index++],
-    actualModel: "test-model",
-    usage: { inputTokens: 10, outputTokens: 5 },
-  });
+  return {
+    requestAction: async (input) => ({
+      action: actions[index++],
+      conversation: input.conversation,
+      actualModel: "test-model",
+      usage: { inputTokens: 10, outputTokens: 5 },
+    }),
+  };
 }
+
+test("retained completed and incomplete experiments preserve their JSON contract and report bytes", async () => {
+  const parent = new URL(
+    "../docs/experiments/runs/milestone-1/",
+    import.meta.url,
+  );
+  for (const name of [
+    "pilot",
+    "baseline-targeted",
+    "baseline-open",
+    "targeted",
+    "open",
+  ]) {
+    const directory = new URL(`${name}/`, parent);
+    const run: RunResult = JSON.parse(
+      await readFile(new URL("run.json", directory), "utf8"),
+    );
+    const manifest = JSON.parse(
+      await readFile(new URL("manifest.json", directory), "utf8"),
+    );
+    const { elapsedMs, ...usage } = run.usage;
+    const projected = projectRunResult(
+      {
+        ...initialInvestigationState(run),
+        finalCandidates: run.finalCandidates,
+        provisionalCandidates: run.provisionalCandidates,
+        termination: run.termination,
+        scopeAndLimitations: run.scopeAndLimitations,
+        trace: run.trace as InvestigationTraceEvent[],
+        usage,
+      },
+      run,
+      elapsedMs,
+    );
+    // Compare the persisted representation: JSON omits optional undefined fields.
+    assert.deepEqual(JSON.parse(JSON.stringify(projected)), run, name);
+    const checked = await validator.validate(
+      projected,
+      manifest,
+      fileURLToPath(new URL("source/", directory)),
+    );
+    const retained = await readFile(new URL("report.md", directory), "utf8");
+    assert.equal(renderer.render(checked), retained, name);
+    assert.equal(
+      renderer.render(checked),
+      retained,
+      `${name}: repeated render`,
+    );
+  }
+});
 
 test("saved report links exact snapshot ranges, includes protective evidence and tools, and is repeatable", async (t) => {
   const f = await fixture(t);
-  const run = await explore(f.snapshot, {}, replies([f.read, f.finish]));
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([f.read, f.finish]),
+  ).run();
   const input = await f.save(run);
   const output = await writeSavedReport(input);
   const markdown = await readFile(output, "utf8");
@@ -142,9 +212,13 @@ test("saved report links exact snapshot ranges, includes protective evidence and
 test("zero candidates and no tool calls do not become a security assurance", async (t) => {
   const f = await fixture(t);
   const finish = { ...f.finish, candidates: [], basedOnToolCallIds: [] };
-  const run = await explore(f.snapshot, {}, replies([finish]));
-  const report = renderReport(
-    await validateReportInput(run, f.manifest, f.root),
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([finish]),
+  ).run();
+  const report = renderer.render(
+    await validator.validate(run, f.manifest, f.root),
   );
   assert.ok(report.includes("No credible candidates were returned"));
   assert.ok(
@@ -157,23 +231,30 @@ test("zero candidates and no tool calls do not become a security assurance", asy
 test("incomplete runs retain provisional candidates and partial usage without presenting final findings", async (t) => {
   const f = await fixture(t);
   let calls = 0;
-  const run = await explore(f.snapshot, {}, async () => {
-    calls++;
-    if (calls === 3) throw new Error("provider interrupted");
-    return {
-      action:
-        calls === 1
-          ? f.read
-          : {
-              ...f.read,
-              checkpoint: [f.candidate],
-              basedOnToolCallIds: ["tool-1"],
-            },
-      usage: { inputTokens: 10, outputTokens: 5 },
-    };
-  });
-  const report = renderReport(
-    await validateReportInput(run, f.manifest, f.root),
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    {
+      requestAction: async (input) => {
+        calls++;
+        if (calls === 3) throw new Error("provider interrupted");
+        return {
+          conversation: input.conversation,
+          action:
+            calls === 1
+              ? f.read
+              : {
+                  ...f.read,
+                  checkpoint: [f.candidate],
+                  basedOnToolCallIds: ["tool-1"],
+                },
+          usage: { inputTokens: 10, outputTokens: 5 },
+        };
+      },
+    },
+  ).run();
+  const report = renderer.render(
+    await validator.validate(run, f.manifest, f.root),
   );
   assert.ok(report.includes("Status: **incomplete**"));
   assert.ok(report.includes("No final assessment is available"));
@@ -188,24 +269,31 @@ test("incomplete runs retain provisional candidates and partial usage without pr
 test("incomplete changed snapshots label provisional evidence as historical and suppress current-source excerpts", async (t) => {
   const f = await fixture(t);
   let calls = 0;
-  const run = await explore(f.snapshot, {}, async () => {
-    calls++;
-    if (calls === 2)
-      await writeFile(path.join(f.root, "query.ts"), "changed\n");
-    return {
-      action:
-        calls === 1
-          ? f.read
-          : {
-              ...f.read,
-              checkpoint: [f.candidate],
-              basedOnToolCallIds: ["tool-1"],
-            },
-    };
-  });
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    {
+      requestAction: async (input) => {
+        calls++;
+        if (calls === 2)
+          await writeFile(path.join(f.root, "query.ts"), "changed\n");
+        return {
+          conversation: input.conversation,
+          action:
+            calls === 1
+              ? f.read
+              : {
+                  ...f.read,
+                  checkpoint: [f.candidate],
+                  basedOnToolCallIds: ["tool-1"],
+                },
+        };
+      },
+    },
+  ).run();
   assert.equal(run.termination.reason, "snapshot_changed");
-  const report = renderReport(
-    await validateReportInput(run, f.manifest, f.root),
+  const report = renderer.render(
+    await validator.validate(run, f.manifest, f.root),
   );
   assert.ok(report.includes("historical only"));
   assert.ok(report.includes("**not revalidated**"));
@@ -215,7 +303,11 @@ test("incomplete changed snapshots label provisional evidence as historical and 
 
 test("completed report generation refuses mutated snapshots without overwriting an earlier report", async (t) => {
   const f = await fixture(t);
-  const run = await explore(f.snapshot, {}, replies([f.read, f.finish]));
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([f.read, f.finish]),
+  ).run();
   const input = await f.save(run);
   const output = await writeSavedReport(input);
   const before = await readFile(output, "utf8");
@@ -226,7 +318,11 @@ test("completed report generation refuses mutated snapshots without overwriting 
 
 test("saved evidence must match actual returned lines, snapshot provenance, and trace accounting", async (t) => {
   const f = await fixture(t);
-  const run = await explore(f.snapshot, {}, replies([f.read, f.finish]));
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([f.read, f.finish]),
+  ).run();
   const cases = [
     (value: RunResult) => {
       value.usage.toolCalls++;
@@ -259,16 +355,16 @@ test("saved evidence must match actual returned lines, snapshot provenance, and 
     const copy = structuredClone(run);
     mutate(copy);
     await assert.rejects(
-      validateReportInput(copy, f.manifest, f.root),
+      validator.validate(copy, f.manifest, f.root),
       ReportValidationError,
     );
   }
   await assert.rejects(
-    validateReportInput({ completion: "completed" }, f.manifest, f.root),
+    validator.validate({ completion: "completed" }, f.manifest, f.root),
     ReportValidationError,
   );
   await assert.rejects(
-    validateReportInput(
+    validator.validate(
       run,
       { ...f.manifest, snapshotId: "b".repeat(64) },
       f.root,
@@ -285,9 +381,13 @@ test("model prose and source filenames cannot introduce active links or HTML int
   );
   f.candidate.claim =
     "[click](javascript:alert(1)) <img src=x onerror=alert(1)>";
-  const run = await explore(f.snapshot, {}, replies([f.read, f.finish]));
-  const report = renderReport(
-    await validateReportInput(run, f.manifest, f.root),
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([f.read, f.finish]),
+  ).run();
+  const report = renderer.render(
+    await validator.validate(run, f.manifest, f.root),
   );
   assert.ok(report.includes("\\[click\\]\\(javascript:alert\\(1\\)\\)"));
   assert.ok(report.includes("&lt;img"));
@@ -298,13 +398,13 @@ test("model prose and source filenames cannot introduce active links or HTML int
 
 test("budget exhaustion before a checkpoint remains an incomplete report", async (t) => {
   const f = await fixture(t);
-  const run = await explore(
+  const run = await createInvestigationWithModel(
     f.snapshot,
     { limits: { ...defaultLimits, modelCalls: 1 } },
     replies([f.read]),
-  );
-  const report = renderReport(
-    await validateReportInput(run, f.manifest, f.root),
+  ).run();
+  const report = renderer.render(
+    await validator.validate(run, f.manifest, f.root),
   );
   assert.ok(report.includes("budget\\_exhausted"));
   assert.ok(
@@ -314,7 +414,11 @@ test("budget exhaustion before a checkpoint remains an incomplete report", async
 
 test("report output cannot follow a symlink to overwrite an unrelated file", async (t) => {
   const f = await fixture(t);
-  const run = await explore(f.snapshot, {}, replies([f.read, f.finish]));
+  const run = await createInvestigationWithModel(
+    f.snapshot,
+    {},
+    replies([f.read, f.finish]),
+  ).run();
   const input = await f.save(run);
   const unrelated = path.join(f.directory, "unrelated.txt");
   await writeFile(unrelated, "keep this content");

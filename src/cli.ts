@@ -2,12 +2,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadEnvFile } from "node:process";
 import { parseArgs } from "node:util";
-import { configSchema, defaultLimits } from "./investigation/contract.ts";
-import { createOpenAIModel } from "./models/openai.ts";
-import { explore } from "./orchestration/explore.ts";
-import { prepareSnapshot } from "./repository/snapshot.ts";
-import { writeSavedReport } from "./reporting/report.ts";
-import { ReportValidationError } from "./reporting/validation.ts";
+import { configSchema, defaultLimits } from "./investigation/contracts.ts";
+import { createInvestigation } from "./composition.ts";
+import { prepareSnapshot } from "./infrastructure/repository/snapshot.ts";
+import { writeSavedReport } from "./reporting/saved-report.ts";
+import { ReportValidationError } from "./reporting/ReportValidator.ts";
 
 async function main() {
   const { values } = parseArgs({
@@ -62,16 +61,12 @@ async function main() {
     outputParent: path.resolve(values.output!),
   });
   const controller = new AbortController();
+  const investigation = createInvestigation(snapshot, config, { apiKey });
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
   let result;
   try {
-    result = await explore(
-      snapshot,
-      config,
-      createOpenAIModel({ apiKey }),
-      controller.signal,
-    );
+    result = await investigation.run(controller.signal);
   } finally {
     process.removeListener("SIGINT", cancel);
   }

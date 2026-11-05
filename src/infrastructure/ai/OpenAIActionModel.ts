@@ -5,8 +5,13 @@ import {
   bindModelAction,
   modelActionSchemas,
   ModelRequestError,
-} from "../investigation/contract.ts";
-import type { RequestAction } from "../investigation/contract.ts";
+} from "../../investigation/contracts.ts";
+import type {
+  ConversationContinuation,
+  ModelInput,
+  ModelReply,
+} from "../../investigation/contracts.ts";
+import type { ActionModel } from "../../investigation/ActionModel.ts";
 
 const descriptions = {
   list_files:
@@ -46,19 +51,22 @@ State uncertainties and suggested next checks. Do not fill a candidate quota or 
 Finish within the provided limits. Zero credible candidates does not establish security.
 Never request or reveal hidden chain-of-thought; provide only short action rationales.`;
 
-/** Stateful conversation for one run; SDK history stays separate from investigation state. */
-export function createOpenAIModel(options: {
-  apiKey: string;
-  fetch?: typeof globalThis.fetch;
-}): RequestAction {
-  const client = new OpenAI({
-    apiKey: options.apiKey,
-    maxRetries: 0,
-    fetch: options.fetch,
-  });
-  const history: ResponseInputItem[] = [];
-  let pendingCallId: string | null = null;
-  return async (input, signal) => {
+/** Provider translation; conversation progress is supplied and returned as wire data. */
+export class OpenAIActionModel implements ActionModel {
+  private readonly client: OpenAI;
+
+  constructor(client: OpenAI) {
+    this.client = client;
+  }
+
+  async requestAction(
+    input: ModelInput,
+    signal: AbortSignal,
+  ): Promise<ModelReply> {
+    // Continuation contains trusted provider wire items; SDK types stay in this adapter.
+    const history = structuredClone(
+      input.conversation.history,
+    ) as unknown as ResponseInputItem[];
     if (!history.length) {
       history.push({
         role: "user",
@@ -72,15 +80,15 @@ export function createOpenAIModel(options: {
         }),
       });
     } else {
-      if (!pendingCallId || !input.observation)
+      if (!input.conversation.pendingCallId || !input.observation)
         throw new Error("Missing tool response in conversation");
       history.push({
         type: "function_call_output",
-        call_id: pendingCallId,
+        call_id: input.conversation.pendingCallId,
         output: JSON.stringify(input.observation),
       });
     }
-    const response = await client.responses
+    const response = await this.client.responses
       .create(
         {
           model: input.config.model,
@@ -116,7 +124,6 @@ export function createOpenAIModel(options: {
       calls.length === 1 && response.status === "completed"
         ? calls[0]
         : undefined;
-    pendingCallId = call?.call_id ?? null;
     let action: unknown = null;
     if (call) {
       try {
@@ -130,6 +137,13 @@ export function createOpenAIModel(options: {
     }
     return {
       action,
+      // Normalize provider items to detached JSON, without SDK-only properties.
+      conversation: JSON.parse(
+        JSON.stringify({
+          history,
+          pendingCallId: call?.call_id ?? null,
+        }),
+      ) as ConversationContinuation,
       actualModel: response.model,
       usage: response.usage
         ? {
@@ -138,5 +152,5 @@ export function createOpenAIModel(options: {
           }
         : undefined,
     };
-  };
+  }
 }
