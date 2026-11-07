@@ -11,12 +11,6 @@ import type { InvestigationState } from "../investigation/state.ts";
 export const investigationStateSchema = z.strictObject({
   ...investigationProgressSchema.shape,
   action: actionSchema.nullable(),
-  pendingAttempt: z
-    .strictObject({
-      eventId: z.string().min(1).max(2000),
-      startedElapsedMs: z.number().nonnegative(),
-    })
-    .nullable(),
   conversation: conversationContinuationSchema,
 }) satisfies z.ZodType<InvestigationState>;
 

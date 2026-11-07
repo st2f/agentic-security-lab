@@ -275,8 +275,7 @@ test("incomplete changed snapshots label provisional evidence as historical and 
     {
       requestAction: async (input) => {
         calls++;
-        if (calls === 2)
-          await writeFile(path.join(f.root, "query.ts"), "changed\n");
+        if (calls === 3) throw new Error("provider interrupted");
         return {
           conversation: input.conversation,
           action:
@@ -291,7 +290,9 @@ test("incomplete changed snapshots label provisional evidence as historical and 
       },
     },
   ).run();
-  assert.equal(run.termination.reason, "snapshot_changed");
+  assert.equal(run.completion, "incomplete");
+  // The saved snapshot changes after the run, before the report is regenerated.
+  await writeFile(path.join(f.root, "query.ts"), "changed\n");
   const report = renderer.render(
     await validator.validate(run, f.manifest, f.root),
   );

@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
@@ -16,11 +18,11 @@ import {
   isValidEvidenceRange,
 } from "../investigation/evidence.ts";
 import {
-  RepositoryInspector,
   serializedBytes,
-  SnapshotChangedError,
+  sourceLines,
 } from "../infrastructure/repository/RepositoryInspector.ts";
 import {
+  decodeText,
   digest,
   excludedPath,
   validRelativePath,
@@ -53,7 +55,6 @@ const savedRunSchema: z.ZodType<RunResult> = z.strictObject({
       "cancelled",
       "model_error",
       "invalid_model_output",
-      "snapshot_changed",
       "execution_error",
     ]),
     limit: limitsSchema.keyof().optional(),
@@ -70,7 +71,7 @@ const savedRunSchema: z.ZodType<RunResult> = z.strictObject({
         type: z.enum(["model", "tool"]),
         startedAt: z.iso.datetime({ offset: true }),
         durationMs: z.number().nonnegative(),
-        outcome: z.enum(["pending", "ok", "error", "stopped"]),
+        outcome: z.enum(["ok", "error", "stopped"]),
         action: actionSchema.optional(),
         arguments: z.unknown().optional(),
         result: z.unknown().optional(),
@@ -102,6 +103,20 @@ const manifestSchema = z.strictObject({
 });
 
 export class ReportValidationError extends Error {}
+
+/** Current source lines, or null when the file is missing or differs from its manifest hash. */
+async function currentSource(
+  root: string,
+  file: string,
+  sha256: string,
+): Promise<SourceLine[] | null> {
+  try {
+    const content = await readFile(path.join(root, file));
+    return digest(content) === sha256 ? sourceLines(decodeText(content)) : null;
+  } catch {
+    return null;
+  }
+}
 function requireValid(condition: unknown, message: string): asserts condition {
   if (!condition) throw new ReportValidationError(message);
 }
@@ -293,7 +308,10 @@ export class ReportValidator {
         "Provisional candidates do not match the latest recorded checkpoint",
       );
     }
-    const inspector = new RepositoryInspector(snapshot);
+    const hashes = new Map(
+      manifest.files.map((file) => [file.path, file.sha256]),
+    );
+    const current = new Map<string, SourceLine[] | null>();
     const evidence = new Map<string, CheckedEvidence>();
     const warnings: string[] = [];
     for (const reference of candidateReferences(candidates)) {
@@ -314,34 +332,35 @@ export class ReportValidator {
       for (let line = reference.startLine; line <= reference.endLine; line++) {
         recorded.push({ line, text: observed.get(line)! });
       }
-      try {
-        const current = await inspector.execute("read_lines", {
-          path: reference.path,
-          startLine: reference.startLine,
-          endLine: reference.endLine,
-        });
+      if (!current.has(reference.path))
+        current.set(
+          reference.path,
+          await currentSource(
+            sourceRoot,
+            reference.path,
+            hashes.get(reference.path)!,
+          ),
+        );
+      const lines = current.get(reference.path);
+      if (lines) {
         requireValid(
-          current.kind === "read_lines" &&
-            !current.truncated &&
-            isDeepStrictEqual(current.lines, recorded),
+          isDeepStrictEqual(
+            lines.slice(reference.startLine - 1, reference.endLine),
+            recorded,
+          ),
           "Saved evidence text does not match the snapshot",
         );
         evidence.set(key, { lines: recorded, verified: true });
-      } catch (error) {
-        if (
-          run.completion !== "incomplete" ||
-          !(error instanceof SnapshotChangedError)
-        ) {
-          if (error instanceof ReportValidationError) throw error;
-          throw new ReportValidationError(
-            "Cited snapshot evidence could not be revalidated; no completed report was produced",
-          );
-        }
-        evidence.set(key, { lines: recorded, verified: false });
-        warnings.push(
-          `Provisional evidence for ${reference.path}:${reference.startLine}–${reference.endLine} is historical only: the snapshot file is changed or unavailable.`,
-        );
+        continue;
       }
+      requireValid(
+        run.completion === "incomplete",
+        "Cited snapshot evidence could not be revalidated; no completed report was produced",
+      );
+      evidence.set(key, { lines: recorded, verified: false });
+      warnings.push(
+        `Provisional evidence for ${reference.path}:${reference.startLine}–${reference.endLine} is historical only: the snapshot file is changed or unavailable.`,
+      );
     }
     return { run, snapshot, evidence, warnings };
   }

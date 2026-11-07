@@ -8,6 +8,7 @@ import { configSchema, defaultLimits } from "../src/investigation/contracts.ts";
 import type {
   Action,
   Candidate,
+  ModelInput,
   ModelReply,
 } from "../src/investigation/contracts.ts";
 import type { InvestigationContext } from "../src/investigation/context.ts";
@@ -111,20 +112,13 @@ async function fixture(t: TestContext) {
 async function step(
   state: InvestigationState,
   context: InvestigationContext,
-  operation: "requestAction" | "executeAction",
+  operation: "chooseAction" | "executeAction",
 ) {
   const before = structuredClone(state);
   freeze(state);
-  const prepare =
-    operation === "requestAction" ? "prepareModel" : "prepareAction";
-  const prepared = { ...state, ...operations[prepare](state, context) };
+  const update = await operations[operation](state, context);
   assert.deepEqual(state, before);
-  if (prepared.termination) return prepared;
-  const beforePrepared = structuredClone(prepared);
-  freeze(prepared);
-  const update = await operations[operation](prepared, context);
-  assert.deepEqual(prepared, beforePrepared);
-  return { ...prepared, ...update };
+  return { ...state, ...update };
 }
 
 test("unexpected provider metadata objects never enter the application trace", async (t) => {
@@ -139,7 +133,7 @@ test("unexpected provider metadata objects never enter the application trace", a
       } as unknown as ModelReply;
     },
   };
-  const next = await step(state, context, "requestAction");
+  const next = await step(state, context, "chooseAction");
   assert.equal(next.trace[0]!.outcome, "ok");
   assert.equal(next.trace[0]!.actualModel, undefined);
   assert.equal(next.usage.inputTokens, 10);
@@ -164,10 +158,10 @@ test("missing or malformed usage remains partial after a later successful reques
         };
       },
     };
-    let state = await step(f.state, f.context, "requestAction");
+    let state = await step(f.state, f.context, "chooseAction");
     assert.equal(state.usage.tokenUsageComplete, false);
     state = await step(state, f.context, "executeAction");
-    state = await step(state, f.context, "requestAction");
+    state = await step(state, f.context, "chooseAction");
     state = await step(state, f.context, "executeAction");
     assert.equal(state.termination!.reason, "model_finished");
     assert.deepEqual(state.finalCandidates, []);
@@ -194,7 +188,7 @@ test("an available reply retains known usage when cancellation prevents acceptin
       };
     },
   };
-  const next = await step(state, context, "requestAction");
+  const next = await step(state, context, "chooseAction");
   assert.equal(next.termination!.reason, "cancelled");
   assert.equal(next.action, null);
   assert.equal(next.finalCandidates, null);
@@ -206,65 +200,87 @@ test("an available reply retains known usage when cancellation prevents acceptin
   assert.equal(next.usage.tokenUsageComplete, true);
 });
 
-test("preparation reserves immutable attempts and completion replaces them without double counting", async (t) => {
+test("each operation counts its own call once and records one trace event", async (t) => {
   const f = await fixture(t);
-  freeze(f.state);
-  const prepared = {
-    ...f.state,
-    ...operations.prepareModel(f.state, f.context),
-  };
-  assert.equal(prepared.usage.modelCalls, 1);
-  assert.equal(prepared.trace.length, 1);
-  assert.equal(prepared.trace[0]!.outcome, "pending");
-  assert.equal(prepared.pendingAttempt!.eventId, prepared.trace[0]!.id);
-  assert.equal(f.state.usage.modelCalls, 0);
-  assert.equal(f.state.trace.length, 0);
-  freeze(prepared);
-  assert.throws(
-    () => operations.prepareModel(prepared, f.context),
-    /already pending/,
-  );
-  assert.throws(
-    () => operations.prepareAction(prepared, f.context),
-    /already pending/,
-  );
   await assert.rejects(
-    operations.requestAction(f.state, f.context),
-    /prepared attempt/,
+    operations.executeAction(f.state, f.context),
+    /No chosen action/,
   );
-  const update = await operations.requestAction(prepared, f.context);
-  const chosen = { ...prepared, ...update };
+  const chosen = await step(f.state, f.context, "chooseAction");
   assert.equal(chosen.usage.modelCalls, 1);
+  assert.equal(chosen.usage.toolCalls, 0);
   assert.equal(chosen.trace.length, 1);
-  assert.equal(chosen.trace[0]!.id, prepared.trace[0]!.id);
-  assert.equal(chosen.pendingAttempt, null);
-  assert.equal(prepared.trace[0]!.outcome, "pending");
-  await assert.rejects(
-    operations.executeAction(chosen, f.context),
-    /prepared attempt/,
-  );
-  const inspection = {
-    ...chosen,
-    ...operations.prepareAction(chosen, f.context),
-  };
-  assert.equal(inspection.usage.toolCalls, 1);
-  assert.equal(inspection.trace[1]!.toolCallId, "tool-1");
-  assert.deepEqual(inspection.trace[1]!.arguments, {
+  assert.equal(chosen.trace[0]!.outcome, "ok");
+  assert.deepEqual(chosen.action, read);
+  const inspected = await step(chosen, f.context, "executeAction");
+  assert.equal(inspected.usage.modelCalls, 1);
+  assert.equal(inspected.usage.toolCalls, 1);
+  assert.equal(inspected.action, null);
+  assert.equal(inspected.trace.length, 2);
+  assert.equal(inspected.trace[1]!.toolCallId, "tool-1");
+  assert.equal(inspected.trace[1]!.outcome, "ok");
+  assert.deepEqual(inspected.trace[1]!.arguments, {
     name: "read_lines",
     path: "query.ts",
     startLine: 1,
     endLine: 2,
   });
-  freeze(inspection);
-  const inspected = {
-    ...inspection,
-    ...(await operations.executeAction(inspection, f.context)),
+});
+
+test("every model call reports the remaining budget; the last affordable call permits only finish", async (t) => {
+  const f = await fixture(t);
+  const budgets: ModelInput["budget"][] = [];
+  f.context.model = {
+    async requestAction(input) {
+      budgets.push(input.budget);
+      return {
+        action: {
+          ...read,
+          checkpoint: input.observation ? [f.candidate] : null,
+        },
+        conversation: input.conversation,
+        usage: { inputTokens: 10, outputTokens: 5 },
+      };
+    },
   };
-  assert.equal(inspected.usage.toolCalls, 1);
-  assert.equal(inspected.trace.length, 2);
-  assert.equal(inspected.trace[1]!.id, inspection.trace[1]!.id);
-  assert.equal(inspected.trace[1]!.outcome, "ok");
-  assert.equal(inspected.pendingAttempt, null);
+  f.context.config = configSchema.parse({
+    limits: { ...defaultLimits, modelCalls: 2 },
+  });
+  let state = await step(f.state, f.context, "chooseAction");
+  state = await step(state, f.context, "executeAction");
+  state = await step(state, f.context, "chooseAction");
+  assert.deepEqual(
+    budgets.map((budget) => [budget.modelCallsAfterThis, budget.finishOnly]),
+    [
+      [1, false],
+      [0, true],
+    ],
+  );
+  assert.equal(budgets[1]!.inspections, defaultLimits.toolCalls - 1);
+  assert.equal(
+    budgets[1]!.toolResponseBytes,
+    defaultLimits.totalToolResponseBytes - state.usage.toolResponseBytes,
+  );
+  // An inspection on a finish-only turn is unaffordable, but its checkpoint is kept.
+  assert.deepEqual(state.termination, {
+    reason: "budget_exhausted",
+    limit: "modelCalls",
+  });
+  assert.equal(state.action, null);
+  assert.deepEqual(state.provisionalCandidates, [f.candidate]);
+  assert.equal(state.trace.at(-1)!.outcome, "ok");
+
+  budgets.length = 0;
+  f.context.config = configSchema.parse({});
+  const toolLimited = await step(
+    { ...f.state, usage: { ...f.state.usage, toolCalls: 40 } },
+    f.context,
+    "chooseAction",
+  );
+  assert.equal(budgets[0]!.inspections, 0);
+  assert.equal(budgets[0]!.finishOnly, true);
+  assert.equal(toolLimited.termination!.limit, "toolCalls");
+  assert.equal(toolLimited.usage.toolCalls, 40);
 });
 
 test("operations return updates over frozen state without retaining progress or exposing trusted config to models", async (t) => {
@@ -285,8 +301,8 @@ test("operations return updates over frozen state without retaining progress or 
   };
   const other = { ...f.state, runId: "other-run" };
   const [first, second] = await Promise.all([
-    step(f.state, f.context, "requestAction"),
-    step(other, f.context, "requestAction"),
+    step(f.state, f.context, "chooseAction"),
+    step(other, f.context, "chooseAction"),
   ]);
   assert.equal(first.usage.modelCalls, 1);
   assert.equal(second.usage.modelCalls, 1);
@@ -329,28 +345,21 @@ test("operations preserve first termination and enforce time and call limits bef
   };
   f.context.execution.interruption = () => ({ reason: "cancelled" });
   assert.equal(
-    (await step(stopped, f.context, "requestAction")).termination!.reason,
+    (await step(stopped, f.context, "chooseAction")).termination!.reason,
     "model_error",
   );
   assert.equal(
-    (await step(f.state, f.context, "requestAction")).termination!.reason,
+    (await step(f.state, f.context, "chooseAction")).termination!.reason,
     "cancelled",
   );
   f.context.execution.interruption = () => null;
   const modelLimited = await step(
     { ...f.state, usage: { ...f.state.usage, modelCalls: 12 } },
     f.context,
-    "requestAction",
+    "chooseAction",
   );
   assert.equal(modelLimited.termination!.limit, "modelCalls");
   assert.equal(modelLimited.trace.length, 0);
-  const toolLimited = await step(
-    { ...f.state, action: read, usage: { ...f.state.usage, toolCalls: 40 } },
-    f.context,
-    "executeAction",
-  );
-  assert.equal(toolLimited.termination!.limit, "toolCalls");
-  assert.equal(toolLimited.trace.length, 0);
   assert.equal(calls, 0);
 });
 
@@ -374,7 +383,7 @@ test("untrusted model fields and unread candidate replacements cannot overwrite 
         };
       },
     };
-    const state = await step(f.state, f.context, "requestAction");
+    const state = await step(f.state, f.context, "chooseAction");
     assert.equal(state.termination!.reason, "invalid_model_output");
     assert.equal(state.action, null);
     assert.deepEqual(state.provisionalCandidates, []);
@@ -385,7 +394,7 @@ test("untrusted model fields and unread candidate replacements cannot overwrite 
   }
 });
 
-test("denied inspection is a bounded observation and final evidence rechecks add no tool accounting", async (t) => {
+test("denied inspection is a bounded observation and final acceptance adds no tool accounting", async (t) => {
   const f = await fixture(t);
   const denied = await step(
     { ...f.state, action: { ...read, path: "../outside" } },
@@ -418,12 +427,17 @@ test("denied inspection is a bounded observation and final evidence rechecks add
   assert.deepEqual(accepted.finalCandidates, [f.candidate]);
   assert.deepEqual(accepted.usage, originalUsage);
   assert.equal(accepted.trace.length, 1);
-  await writeFile(path.join(f.root, "query.ts"), "changed\n");
-  const rejected = await step(inspected, f.context, "executeAction");
-  assert.equal(rejected.termination!.reason, "snapshot_changed");
-  assert.equal(rejected.finalCandidates, null);
-  assert.deepEqual(rejected.provisionalCandidates, [f.candidate]);
-  assert.deepEqual(rejected.usage, originalUsage);
+  const unread = await step(
+    {
+      ...inspected,
+      action: finish([{ ...f.candidate, id: "x" }, f.candidate]),
+    },
+    { ...f.context, config: configSchema.parse({ maxCandidates: 1 }) },
+    "executeAction",
+  );
+  assert.equal(unread.termination!.reason, "invalid_model_output");
+  assert.equal(unread.finalCandidates, null);
+  assert.deepEqual(unread.provisionalCandidates, [f.candidate]);
 });
 
 test("response budgets count failed inspection attempts without exposing oversized data", async (t) => {
@@ -449,7 +463,7 @@ test("response budgets count failed inspection attempts without exposing oversiz
   assert.equal(result.trace[0]!.result, undefined);
 });
 
-test("cancellation between scheduling and invocation consumes the attempt without dispatching work", async (t) => {
+test("cancellation between scheduling and invocation dispatches and counts nothing", async (t) => {
   const f = await fixture(t);
   const controller = new AbortController();
   const execution = new ExecutionScope(1000);
@@ -463,21 +477,15 @@ test("cancellation between scheduling and invocation consumes the attempt withou
       return { action: finish(), conversation: input.conversation };
     },
   };
-  const prepared = {
-    ...f.state,
-    ...operations.prepareModel(f.state, f.context),
-  };
-  freeze(prepared);
-  const pending = operations.requestAction(prepared, f.context);
+  freeze(f.state);
+  const pending = operations.chooseAction(f.state, f.context);
   controller.abort();
   const update = await pending;
   assert.equal(calls, 0);
   assert.equal(update.termination!.reason, "cancelled");
-  assert.equal(update.usage!.modelCalls, 1);
-  assert.equal(update.usage!.tokenUsageComplete, false);
-  assert.equal(update.trace!.length, 1);
+  assert.equal(update.usage, undefined);
+  assert.equal(update.trace, undefined);
   assert.equal(update.action, null);
-  assert.equal(f.state.usage.modelCalls, 0);
 });
 
 test("late noncooperating model responses cannot mutate returned updates or frozen input state", async (t) => {
@@ -493,7 +501,7 @@ test("late noncooperating model responses cannot mutate returned updates or froz
   execution.start();
   t.after(() => execution.dispose());
   f.context.execution = execution;
-  const result = await step(f.state, f.context, "requestAction");
+  const result = await step(f.state, f.context, "chooseAction");
   assert.equal(result.termination!.limit, "elapsedMs");
   assert.equal(result.usage.modelCalls, 1);
   assert.equal(result.usage.tokenUsageComplete, false);

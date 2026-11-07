@@ -2,6 +2,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { loadEnvFile } from "node:process";
 import { parseArgs } from "node:util";
+import OpenAI from "openai";
+import { z } from "zod";
 import { configSchema, defaultLimits } from "./investigation/contracts.ts";
 import { createInvestigation } from "./composition.ts";
 import { prepareSnapshot } from "./infrastructure/repository/snapshot.ts";
@@ -82,7 +84,7 @@ async function main() {
     console.error(
       error instanceof ReportValidationError
         ? error.message
-        : "Run JSON was saved, but its Markdown report could not be written.",
+        : `Run JSON was saved, but its Markdown report could not be written: ${describe(error)}`,
     );
     process.exitCode = 1;
   }
@@ -102,10 +104,16 @@ async function main() {
   if (result.completion === "incomplete") process.exitCode = 1;
 }
 
-main().catch(() => {
-  // SDK/network errors may contain request details; do not dump them or credentials.
-  console.error(
-    "Investigation could not start or save its result. Check CLI arguments, local repository, output path, and OPENAI_API_KEY.",
-  );
+/** Show the application's own messages; SDK errors may carry request details. */
+function describe(error: unknown): string {
+  if (error instanceof z.ZodError)
+    return `Invalid options:\n${z.prettifyError(error)}`;
+  if (error instanceof OpenAI.OpenAIError || !(error instanceof Error))
+    return "Model client error; check OPENAI_API_KEY and network access.";
+  return error.message;
+}
+
+main().catch((error: unknown) => {
+  console.error(`Investigation failed: ${describe(error)}`);
   process.exitCode = 1;
 });

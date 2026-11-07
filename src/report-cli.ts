@@ -1,6 +1,5 @@
 import { parseArgs } from "node:util";
 import { writeSavedReport } from "./reporting/saved-report.ts";
-import { ReportValidationError } from "./reporting/ReportValidator.ts";
 
 try {
   const { values } = parseArgs({ options: { run: { type: "string" } } });
@@ -14,9 +13,9 @@ try {
   }
 } catch (error) {
   console.error(
-    error instanceof ReportValidationError
-      ? error.message
-      : "Could not render report. Check the run JSON, manifest, source snapshot, and output directory.",
+    error instanceof Error
+      ? `Could not render report: ${error.message}`
+      : "Could not render report.",
   );
   process.exitCode = 1;
 }

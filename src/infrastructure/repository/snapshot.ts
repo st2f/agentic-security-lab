@@ -83,7 +83,7 @@ export async function prepareSnapshot(input: {
 }): Promise<Snapshot> {
   if (!/^[a-f0-9]{40}$/.test(input.commit))
     throw new Error("A full Git commit ID is required");
-  const subtree = input.subtree ?? "";
+  const subtree = (input.subtree ?? "").replace(/\/+$/, "");
   if (subtree && !validRelativePath(subtree))
     throw new Error("Invalid source subtree");
   const git = async (args: string[]) =>

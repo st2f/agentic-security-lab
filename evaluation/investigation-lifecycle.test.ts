@@ -26,7 +26,6 @@ import type { InvestigationState } from "../src/investigation/state.ts";
 import {
   OutputBudgetError,
   RepositoryInspector,
-  SnapshotChangedError,
 } from "../src/infrastructure/repository/RepositoryInspector.ts";
 import { digest } from "../src/infrastructure/repository/snapshot.ts";
 import { ReportValidator } from "../src/reporting/ReportValidator.ts";
@@ -91,6 +90,24 @@ async function fixture(t: TestContext): Promise<InvestigationDependencies> {
   };
 }
 
+/** Progress after one accepted model call whose inspection has not run. */
+function afterModelCall(state: InvestigationState): InvestigationState {
+  return {
+    ...state,
+    usage: { ...state.usage, modelCalls: 1, inputTokens: 10, outputTokens: 5 },
+    trace: [
+      {
+        id: "event-1",
+        type: "model",
+        startedAt: new Date().toISOString(),
+        durationMs: 0,
+        outcome: "ok",
+        action: read,
+      },
+    ],
+  };
+}
+
 function runner(
   dependencies: InvestigationDependencies,
   workflow: InvestigationWorkflow = new ExplorationWorkflow(
@@ -142,7 +159,6 @@ test("every termination path clears its timer and both cancellation listener set
     "invalid",
     "calls",
     "bytes",
-    "snapshot",
     "cancel",
     "pre_cancel",
     "deadline",
@@ -172,7 +188,7 @@ test("every termination path clears its timer and both cancellation listener set
           action:
             mode === "invalid"
               ? null
-              : ["calls", "bytes", "snapshot"].includes(mode)
+              : ["calls", "bytes"].includes(mode)
                 ? read
                 : finish,
           conversation: input.conversation,
@@ -186,15 +202,9 @@ test("every termination path clears its timer and both cancellation listener set
           throw new OutputBudgetError();
         },
       };
-    if (mode === "snapshot")
-      dependencies.inspector = {
-        async execute() {
-          throw new SnapshotChangedError();
-        },
-      };
     const operations = new InvestigationOperations();
     if (mode === "unexpected")
-      t.mock.method(operations, "requestAction", async () => {
+      t.mock.method(operations, "chooseAction", async () => {
         throw new Error("unexpected node failure");
       });
     const beforeStart = scopes.length;
@@ -213,13 +223,11 @@ test("every termination path clears its timer and both cancellation listener set
           ? "invalid_model_output"
           : ["calls", "bytes", "deadline"].includes(mode)
             ? "budget_exhausted"
-            : mode === "snapshot"
-              ? "snapshot_changed"
-              : ["cancel", "pre_cancel"].includes(mode)
-                ? "cancelled"
-                : mode === "unexpected" || mode === "start_error"
-                  ? "execution_error"
-                  : "model_error";
+            : ["cancel", "pre_cancel"].includes(mode)
+              ? "cancelled"
+              : mode === "unexpected" || mode === "start_error"
+                ? "execution_error"
+                : "model_error";
     assert.equal(result.termination.reason, expected, mode);
     assert.equal(scopes.length, beforeStart + 1, mode);
     const { scope, handle } = scopes.at(-1)!;
@@ -265,10 +273,7 @@ test("runner seals committed state before cleanup callbacks and ignores later ob
                 },
               ],
             }
-          : {
-              ...state,
-              ...new InvestigationOperations().prepareModel(state, context),
-            };
+          : afterModelCall(state);
         observe(committed);
         poisoned = {
           ...committed,
@@ -291,7 +296,7 @@ test("runner seals committed state before cleanup callbacks and ignores later ob
       completed ? "model_finished" : "execution_error",
     );
     assert.equal(result.usage.modelCalls, 1);
-    assert.equal(result.usage.tokenUsageComplete, completed);
+    assert.equal(result.usage.tokenUsageComplete, true);
     const published = structuredClone(result);
     notify(poisoned);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -314,10 +319,7 @@ test("unexpected failure preserves a committed reason or recognizes cancellation
     const controller = new AbortController();
     const workflow: InvestigationWorkflow = {
       async run(state, context, observe) {
-        const committed = {
-          ...state,
-          ...new InvestigationOperations().prepareModel(state, context),
-        };
+        const committed = afterModelCall(state);
         if (cause === "already_stopped")
           committed.termination = { reason: "model_error" };
         observe(committed);
@@ -339,8 +341,7 @@ test("unexpected failure preserves a committed reason or recognizes cancellation
             : "execution_error",
     );
     assert.equal(result.usage.modelCalls, 1);
-    assert.equal(result.trace[0]!.outcome, "pending");
-    assert.equal(result.usage.tokenUsageComplete, false);
+    assert.equal(result.trace[0]!.outcome, "ok");
     assert.equal(getEventListeners(controller.signal, "abort").length, 0);
     await validate(result, dependencies);
   }

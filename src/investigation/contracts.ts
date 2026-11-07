@@ -187,7 +187,6 @@ export type Termination = {
     | "cancelled"
     | "model_error"
     | "invalid_model_output"
-    | "snapshot_changed"
     | "execution_error";
   limit?: keyof RunConfig["limits"];
   detail?: string;
@@ -197,7 +196,7 @@ export type TraceEvent = {
   type: "model" | "tool";
   startedAt: string;
   durationMs: number;
-  outcome: "pending" | "ok" | "error" | "stopped";
+  outcome: "ok" | "error" | "stopped";
   action?: Action;
   arguments?: unknown;
   result?: unknown;
@@ -239,12 +238,23 @@ export type ConversationContinuation = z.infer<
   typeof conversationContinuationSchema
 >;
 
+/** Remaining allowances shown to the model on every turn; the application still enforces them. */
+export type ModelBudget = {
+  modelCallsAfterThis: number;
+  inspections: number;
+  toolResponseBytes: number;
+  milliseconds: number;
+  /** Only `finish` is permitted: no later model call could use another observation. */
+  finishOnly: boolean;
+};
+
 // A narrow call boundary for deterministic testing, not a provider routing system.
 export type ModelInput = {
   snapshotId: string;
   config: RunConfig;
   observation: { toolCallId: string; result: unknown } | null;
   conversation: ConversationContinuation;
+  budget: ModelBudget;
 };
 export type ModelReply = {
   action: unknown;

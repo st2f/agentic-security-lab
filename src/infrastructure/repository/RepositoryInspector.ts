@@ -1,23 +1,11 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  decodeText,
-  digest,
-  excludedPath,
-  snapshotPolicy,
-  validRelativePath,
-} from "./snapshot.ts";
+import { decodeText, excludedPath, validRelativePath } from "./snapshot.ts";
 import type { Snapshot } from "./snapshot.ts";
 import type {
   InspectionLine as SourceLine,
   InspectionResult as Result,
 } from "../../investigation/contracts.ts";
-
-export class SnapshotChangedError extends Error {
-  constructor() {
-    super("Snapshot content or filesystem boundary changed");
-  }
-}
 
 export class OutputBudgetError extends Error {
   constructor() {
@@ -80,7 +68,8 @@ function argumentsFor(
   return value as Record<string, unknown>;
 }
 
-function lines(text: string): SourceLine[] {
+/** One-based source lines; CRLF is normalized and a final newline adds no line. */
+export function sourceLines(text: string): SourceLine[] {
   if (!text.length) return [];
   const split = text.split("\n");
   if (split.at(-1) === "") split.pop();
@@ -90,17 +79,18 @@ function lines(text: string): SourceLine[] {
   }));
 }
 
-/** One instance is scoped to one prepared snapshot; caller owns run-wide accounting. */
+/**
+ * Bounded read-only access to one prepared snapshot; caller owns run-wide accounting.
+ * Access is limited to manifest paths. The snapshot is application-owned, so reads
+ * do not re-verify hashes; saved-report validation rechecks cited source instead.
+ */
 export class RepositoryInspector {
   private readonly snapshot: Snapshot;
   private readonly maxResponseBytes: number;
-  private readonly manifest: Map<string, string>;
   private readonly paths: string[];
   private readonly root: string;
 
   constructor(snapshot: Snapshot, maxResponseBytes = 16_384) {
-    this.snapshot = snapshot;
-    this.maxResponseBytes = maxResponseBytes;
     if (
       !Number.isSafeInteger(maxResponseBytes) ||
       maxResponseBytes < 256 ||
@@ -108,55 +98,22 @@ export class RepositoryInspector {
     ) {
       throw new Error("Response allowance must be between 256 and 16384 bytes");
     }
-    // Copy the trusted manifest so later caller mutations cannot broaden access.
-    this.manifest = new Map(
-      snapshot.files.map((file) => [file.path, file.sha256]),
-    );
-    this.paths = [...this.manifest.keys()]
-      .filter((file) => validRelativePath(file) && !excludedPath(file))
-      .sort();
+    this.snapshot = snapshot;
+    this.maxResponseBytes = maxResponseBytes;
+    // Copied, so later changes to caller-owned metadata cannot broaden access.
+    this.paths = snapshot.files.map((file) => file.path).sort();
     this.root = path.resolve(snapshot.root);
   }
 
-  private async readVerified(
+  private async read(
     file: string,
     signal?: AbortSignal,
   ): Promise<SourceLine[]> {
-    signal?.throwIfAborted();
     if (!this.paths.includes(file))
       throw new InputError("File is not in the accessible manifest");
-    try {
-      const rootInfo = await lstat(this.root);
-      if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory())
-        throw new SnapshotChangedError();
-      let current = this.root;
-      const segments = file.split("/");
-      for (const [index, segment] of segments.entries()) {
-        current = path.join(current, segment);
-        const info = await lstat(current);
-        if (
-          info.isSymbolicLink() ||
-          (index < segments.length - 1
-            ? !info.isDirectory()
-            : !info.isFile() || info.size > snapshotPolicy.maxFileBytes)
-        ) {
-          throw new SnapshotChangedError();
-        }
-      }
-      const canonicalRoot = await realpath(this.root);
-      const canonicalFile = await realpath(current);
-      if (!canonicalFile.startsWith(canonicalRoot + path.sep))
-        throw new SnapshotChangedError();
-      const content = await readFile(canonicalFile, { signal });
-      signal?.throwIfAborted();
-      if (digest(content) !== this.manifest.get(file))
-        throw new SnapshotChangedError();
-      return lines(decodeText(content));
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (error instanceof SnapshotChangedError) throw error;
-      throw new SnapshotChangedError();
-    }
+    // Manifest paths are validated relative paths, so joining cannot escape the root.
+    const content = await readFile(path.join(this.root, file), { signal });
+    return sourceLines(decodeText(content));
   }
 
   private page<T>(
@@ -238,7 +195,7 @@ export class RepositoryInspector {
         const matches: Match[] = [];
         let skippedMatches = 0;
         search: for (const file of files) {
-          for (const line of await this.readVerified(file, signal)) {
+          for (const line of await this.read(file, signal)) {
             if (!line.text.includes(args.query)) continue;
             if (skippedMatches < offset) {
               skippedMatches++;
@@ -269,7 +226,7 @@ export class RepositoryInspector {
         );
         if (end - start >= 200)
           throw new InputError("Read at most 200 lines per request");
-        const content = await this.readVerified(file, signal);
+        const content = await this.read(file, signal);
         if (start > content.length && !(start === 1 && !content.length))
           throw new InputError("Start line is past the end of the file");
         return this.page(

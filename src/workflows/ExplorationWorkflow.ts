@@ -42,47 +42,35 @@ function invocationContext(runtime: {
   return runtime.context;
 }
 
-/** One compiled graph; all run-specific dependencies arrive through runtime context. */
+/**
+ * One compiled graph; all run-specific dependencies arrive through runtime context.
+ * The loop is `choose_action → execute_action → choose_action`, ending on termination.
+ */
 export class ExplorationWorkflow {
   private readonly graph;
 
   constructor(operations: InvestigationOperations) {
+    const next =
+      (node: "choose_action" | "execute_action") =>
+      (state: InvestigationState) => (state.termination ? END : node);
     this.graph = new StateGraph(InvestigationGraphState, {
       context: contextSchema,
     })
-      .addNode("prepare_model", (state, runtime) =>
-        operations.prepareModel(state, invocationContext(runtime)),
-      )
       .addNode("choose_action", (state, runtime) =>
-        operations.requestAction(state, invocationContext(runtime)),
-      )
-      .addNode("prepare_action", (state, runtime) =>
-        operations.prepareAction(state, invocationContext(runtime)),
+        operations.chooseAction(state, invocationContext(runtime)),
       )
       .addNode("execute_action", (state, runtime) =>
         operations.executeAction(state, invocationContext(runtime)),
       )
-      .addEdge(START, "prepare_model")
-      .addConditionalEdges(
-        "prepare_model",
-        (state) => (state.termination ? END : "choose_action"),
-        [END, "choose_action"],
-      )
-      .addConditionalEdges(
-        "choose_action",
-        (state) => (state.termination ? END : "prepare_action"),
-        [END, "prepare_action"],
-      )
-      .addConditionalEdges(
-        "prepare_action",
-        (state) => (state.termination ? END : "execute_action"),
-        [END, "execute_action"],
-      )
-      .addConditionalEdges(
+      .addEdge(START, "choose_action")
+      .addConditionalEdges("choose_action", next("execute_action"), [
+        END,
         "execute_action",
-        (state) => (state.termination ? END : "prepare_model"),
-        [END, "prepare_model"],
-      )
+      ])
+      .addConditionalEdges("execute_action", next("choose_action"), [
+        END,
+        "choose_action",
+      ])
       .compile();
   }
 
@@ -112,8 +100,8 @@ export class ExplorationWorkflow {
           callbacks: [],
           streamMode: "values",
           outputKeys: progressKeys,
-          // Four nodes per model round, plus a final budget check and routing margin.
-          recursionLimit: context.config.limits.modelCalls * 4 + 4,
+          // Two nodes per model round, plus a final budget check and routing margin.
+          recursionLimit: context.config.limits.modelCalls * 2 + 2,
         });
         for await (const current of stream) {
           state = projectInvestigationProgress(current);

@@ -26,18 +26,12 @@ export type InvestigationTraceEvent = Omit<
   result?: InspectionResult;
 };
 
-/** A reserved application attempt does not prove external/provider dispatch. */
-export type PendingAttempt = {
-  eventId: string;
-  startedElapsedMs: number;
-};
-
 /** Invocation-local investigation progress; execution resources live in context. */
 export type InvestigationState = {
   runId: string;
   snapshotId: string;
+  /** Chosen by `choose_action`, consumed by `execute_action`. */
   action: Action | null;
-  pendingAttempt: PendingAttempt | null;
   provisionalCandidates: Candidate[];
   finalCandidates: Candidate[] | null;
   termination: Termination | null;
@@ -91,7 +85,6 @@ export const investigationProgressSchema = z.strictObject({
         "cancelled",
         "model_error",
         "invalid_model_output",
-        "snapshot_changed",
         "execution_error",
       ]),
       limit: limitsSchema.keyof().optional(),
@@ -114,7 +107,7 @@ export const investigationProgressSchema = z.strictObject({
         type: z.enum(["model", "tool"]),
         startedAt: z.iso.datetime({ offset: true }),
         durationMs: z.number().nonnegative(),
-        outcome: z.enum(["pending", "ok", "error", "stopped"]),
+        outcome: z.enum(["ok", "error", "stopped"]),
         action: actionSchema.optional(),
         arguments: inspectionArgumentsSchema.optional(),
         result: inspectionResultSchema.optional(),
@@ -125,11 +118,12 @@ export const investigationProgressSchema = z.strictObject({
     .max(2200),
 }) satisfies z.ZodType<InvestigationProgress>;
 
-/** Allowlisted, validated, detached view for recovery observers and output. */
+/** Allowlisted, detached view for recovery observers and output. */
 export function projectInvestigationProgress(
   state: InvestigationProgress,
 ): InvestigationProgress {
-  const selected = {
+  // Validation must not reorder recorded arguments when reports serialize them.
+  return structuredClone({
     runId: state.runId,
     snapshotId: state.snapshotId,
     provisionalCandidates: state.provisionalCandidates,
@@ -138,10 +132,7 @@ export function projectInvestigationProgress(
     scopeAndLimitations: state.scopeAndLimitations,
     usage: state.usage,
     trace: state.trace,
-  };
-  investigationProgressSchema.parse(selected);
-  // Validation must not reorder recorded arguments when reports serialize them.
-  return structuredClone(selected);
+  });
 }
 
 export function initialInvestigationState(identity: {
@@ -152,7 +143,6 @@ export function initialInvestigationState(identity: {
     runId: identity.runId,
     snapshotId: identity.snapshotId,
     action: null,
-    pendingAttempt: null,
     provisionalCandidates: [],
     finalCandidates: null,
     termination: null,
@@ -244,6 +234,8 @@ export function projectRunResult(
   if (!Number.isFinite(elapsedMs) || elapsedMs < 0)
     throw new Error("Elapsed time must be finite and nonnegative");
   const state = projectInvestigationProgress(committed);
+  // One strict check at the output boundary, before anything is saved.
+  investigationProgressSchema.parse(state);
   const completed = state.termination?.reason === "model_finished";
   if (completed !== (state.finalCandidates !== null))
     throw new Error(
@@ -272,14 +264,6 @@ export function projectRunResult(
       reason,
     })),
     trace: state.trace,
-    usage: {
-      ...state.usage,
-      elapsedMs,
-      tokenUsageComplete:
-        state.usage.tokenUsageComplete &&
-        !state.trace.some(
-          (event) => event.type === "model" && event.outcome === "pending",
-        ),
-    },
+    usage: { ...state.usage, elapsedMs },
   });
 }

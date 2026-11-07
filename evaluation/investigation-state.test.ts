@@ -62,7 +62,7 @@ const modelEvent: InvestigationTraceEvent = {
   type: "model",
   startedAt: "2026-11-05T10:00:00.000Z",
   durationMs: 0,
-  outcome: "pending",
+  outcome: "error",
 };
 
 test("initial state is independently owned and JSON serializable; schema rejects execution resources", () => {
@@ -321,13 +321,9 @@ test("result projection exactly preserves current completed, empty, and incomple
   }
 });
 
-test("projection retains pending attempts conservatively and never treats them as successful dispatch", () => {
+test("projection of an interrupted state keeps progress and omits working fields", () => {
   const state = initialInvestigationState(identity);
   state.provisionalCandidates = [structuredClone(candidate)];
-  state.pendingAttempt = {
-    eventId: modelEvent.id,
-    startedElapsedMs: 3,
-  };
   state.trace = [structuredClone(modelEvent)];
   state.usage.modelCalls = 1;
   state.usage.inputTokens = 10;
@@ -336,13 +332,10 @@ test("projection retains pending attempts conservatively and never treats them a
   assert.equal(result.finalCandidates, null);
   assert.deepEqual(result.provisionalCandidates, [candidate]);
   assert.deepEqual(result.termination, { reason: "execution_error" });
-  assert.equal(result.trace[0]!.outcome, "pending");
   assert.equal(result.usage.modelCalls, 1);
   assert.equal(result.usage.inputTokens, 10);
-  assert.equal(result.usage.tokenUsageComplete, false);
-  assert.equal("pendingAttempt" in result, false);
+  assert.equal("action" in result, false);
   assert.equal("conversation" in result, false);
-  assert.equal(state.usage.tokenUsageComplete, true);
 });
 
 test("projection rejects contradictory completion and invalid elapsed time", () => {

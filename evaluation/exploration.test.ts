@@ -162,14 +162,14 @@ test("unexpected graph failure preserves committed evidence and the latest valid
   const operations = new InvestigationOperations();
   const model = scripted([() => read(), () => read([saved], ["tool-1"])]);
   const invokeModel = t.mock.method(model, "requestAction");
-  const requestAction = operations.requestAction.bind(operations);
+  const chooseAction = operations.chooseAction.bind(operations);
   t.mock.method(
     operations,
-    "requestAction",
+    "chooseAction",
     async (state: InvestigationState, context: InvestigationContext) => {
-      if (state.usage.modelCalls === 3)
+      if (state.usage.modelCalls === 2)
         throw new Error("unexpected node failure");
-      return requestAction(state, context);
+      return chooseAction(state, context);
     },
   );
   const runner = new InvestigationRunner(
@@ -190,14 +190,13 @@ test("unexpected graph failure preserves committed evidence and the latest valid
   assert.equal(result.termination.reason, "execution_error");
   assert.equal(result.finalCandidates, null);
   assert.deepEqual(result.provisionalCandidates, [saved]);
-  assert.equal(result.usage.modelCalls, 3);
-  // The third event is committed preparation, without an external invocation.
+  // The third node failed before dispatch, so only two calls exist.
+  assert.equal(result.usage.modelCalls, 2);
   assert.equal(invokeModel.mock.callCount(), 2);
   assert.equal(result.usage.inputTokens, 20);
   assert.equal(result.usage.toolCalls, 2);
-  assert.equal(result.trace.length, 5);
-  assert.equal(result.trace.at(-1)!.outcome, "pending");
-  assert.equal(result.usage.tokenUsageComplete, false);
+  assert.equal(result.trace.length, 4);
+  assert.equal(result.usage.tokenUsageComplete, true);
   assert.equal(result.trace[1]!.outcome, "ok");
   assert.equal(getEventListeners(controller.signal, "abort").length, 0);
   const { root, ...manifest } = snapshot;
@@ -250,10 +249,12 @@ test("production composition connects inspection to the adapter with a fresh con
     const observation = requests[run * 2 + 1]!.input.find(
       (item) => item.type === "function_call_output",
     );
-    assert.deepEqual(JSON.parse(observation!.output!), {
-      toolCallId: "tool-1",
-      result: result.trace[1]!.result,
-    });
+    const output = JSON.parse(observation!.output!);
+    assert.equal(output.toolCallId, "tool-1");
+    assert.deepEqual(output.result, result.trace[1]!.result);
+    assert.equal(output.remainingBudget.modelCallsAfterThis, 10);
+    assert.equal(output.remainingBudget.inspections, 39);
+    assert.equal(output.remainingBudget.finishOnly, false);
     assert.equal(
       (result.trace[1]!.result as { path: string }).path,
       "query.ts",
@@ -488,23 +489,6 @@ test("cumulative response bytes and oversized lines terminate without extra mode
   ).run();
   assert.equal(oversized.termination.limit, "toolResponseBytes");
   assert.equal(oversized.usage.modelCalls, 1);
-});
-
-test("snapshot mutation after inspection prevents final acceptance", async (t) => {
-  const snapshot = await source(t);
-  const result = await createInvestigationWithModel(
-    snapshot,
-    {},
-    scripted([
-      () => read(),
-      async () => {
-        await writeFile(path.join(snapshot.root, "query.ts"), "changed\n");
-        return finish([candidate(snapshot)]);
-      },
-    ]),
-  ).run();
-  assert.equal(result.termination.reason, "snapshot_changed");
-  assert.equal(result.finalCandidates, null);
 });
 
 test("deadline aborts a noncooperating model and prevents subsequent actions", async (t) => {

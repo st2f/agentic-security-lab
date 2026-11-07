@@ -1,11 +1,14 @@
-import { isDeepStrictEqual } from "node:util";
 import {
   actionSchema,
   conversationContinuationSchema,
-  inspectionResultSchema,
   ModelRequestError,
 } from "./contracts.ts";
-import type { Action, Candidate, Termination } from "./contracts.ts";
+import type {
+  Action,
+  Candidate,
+  ModelBudget,
+  Termination,
+} from "./contracts.ts";
 import type { InvestigationContext } from "./context.ts";
 import {
   candidateReferences,
@@ -21,122 +24,58 @@ import type { InvestigationState, InvestigationTraceEvent } from "./state.ts";
 import {
   OutputBudgetError,
   serializedBytes,
-  SnapshotChangedError,
 } from "../infrastructure/repository/RepositoryInspector.ts";
 
 class InvalidOutput extends Error {}
 
-/** Investigation policy and actions over explicit state; retains no run progress. */
+type Update = Partial<InvestigationState>;
+type Inspection = Exclude<Action, { name: "finish" }>;
+
+/** Investigation policy over explicit state; retains no run progress. */
 export class InvestigationOperations {
-  prepareModel(
+  /** `choose_action`: enforce call limits, ask the model, validate its choice. */
+  async chooseAction(
     state: InvestigationState,
     context: InvestigationContext,
-  ): Partial<InvestigationState> {
-    this.assertIdle(state);
+  ): Promise<Update> {
     const stopped = this.interruption(state, context);
     if (stopped) return { action: null, termination: stopped };
-    if (state.usage.modelCalls >= context.config.limits.modelCalls)
+    const { limits } = context.config;
+    if (state.usage.modelCalls >= limits.modelCalls)
       return {
         action: null,
         termination: { reason: "budget_exhausted", limit: "modelCalls" },
       };
+    const budget = this.budget(state, context);
+    const usage = { ...state.usage, modelCalls: state.usage.modelCalls + 1 };
     const entry = this.event(state, "model");
-    return {
-      action: null,
-      usage: { ...state.usage, modelCalls: state.usage.modelCalls + 1 },
-      trace: [...state.trace, entry],
-      pendingAttempt: {
-        eventId: entry.id,
-        startedElapsedMs: context.execution.elapsedMs,
-      },
-    };
-  }
-
-  prepareAction(
-    state: InvestigationState,
-    context: InvestigationContext,
-  ): Partial<InvestigationState> {
-    this.assertIdle(state);
-    const stopped = this.interruption(state, context);
-    if (stopped) return { action: null, termination: stopped };
-    const parsed = actionSchema.safeParse(state.action);
-    if (!parsed.success)
-      return { action: null, termination: { reason: "invalid_model_output" } };
-    const action = parsed.data;
-    // Finish rechecks retain their existing accounting: no inspection reservation.
-    if (action.name === "finish") return { action };
-    if (state.usage.toolCalls >= context.config.limits.toolCalls)
-      return {
-        action: null,
-        termination: { reason: "budget_exhausted", limit: "toolCalls" },
-      };
-    const entry = this.event(state, "tool");
-    const usage = { ...state.usage, toolCalls: state.usage.toolCalls + 1 };
-    const {
-      name,
-      rationale: _rationale,
-      basedOnToolCallIds: _basis,
-      checkpoint: _checkpoint,
-      ...args
-    } = action;
-    entry.toolCallId = `tool-${usage.toolCalls}`;
-    entry.arguments = { name, ...args };
-    return {
-      action,
-      usage,
-      trace: [...state.trace, entry],
-      pendingAttempt: {
-        eventId: entry.id,
-        startedElapsedMs: context.execution.elapsedMs,
-      },
-    };
-  }
-
-  async requestAction(
-    state: InvestigationState,
-    context: InvestigationContext,
-  ): Promise<Partial<InvestigationState>> {
-    const { entry, begin } = this.attempt(state, "model");
-    const usage = { ...state.usage };
-    const update: Partial<InvestigationState> = {
-      action: null,
-      pendingAttempt: null,
-      usage,
-    };
-    const stopped = this.interruption(state, context);
-    if (stopped) {
-      entry.outcome = "stopped";
-      usage.tokenUsageComplete = false;
-      return {
-        ...update,
-        termination: stopped,
-        ...this.closeAttempt(state, entry, begin, context),
-      };
-    }
+    const begin = context.execution.elapsedMs;
+    const update: Update = { action: null, usage };
     let invoked = false;
     let receivedUsage = false;
     try {
       const reply = await context.execution.bounded((signal) => {
-        const input = {
-          snapshotId: context.snapshot.snapshotId,
-          config: structuredClone(context.config),
-          observation: latestObservation(state),
-          conversation: structuredClone(state.conversation),
-        };
-        if (this.interruption(state, context))
-          throw new Error("Execution interrupted before model invocation");
         invoked = true;
-        return context.model.requestAction(input, signal);
+        return context.model.requestAction(
+          {
+            snapshotId: context.snapshot.snapshotId,
+            config: structuredClone(context.config),
+            observation: latestObservation(state),
+            conversation: structuredClone(state.conversation),
+            budget,
+          },
+          signal,
+        );
       });
+      const tokens = reply.usage;
       if (
-        reply.usage &&
-        Number.isSafeInteger(reply.usage.inputTokens) &&
-        reply.usage.inputTokens >= 0 &&
-        Number.isSafeInteger(reply.usage.outputTokens) &&
-        reply.usage.outputTokens >= 0
+        tokens &&
+        [tokens.inputTokens, tokens.outputTokens].every(
+          (value) => Number.isSafeInteger(value) && value >= 0,
+        )
       ) {
-        usage.inputTokens += reply.usage.inputTokens;
-        usage.outputTokens += reply.usage.outputTokens;
+        usage.inputTokens += tokens.inputTokens;
+        usage.outputTokens += tokens.outputTokens;
         receivedUsage = true;
       }
       if (
@@ -145,11 +84,13 @@ export class InvestigationOperations {
         reply.actualModel.length <= 2000
       )
         entry.actualModel = reply.actualModel;
+      // A reply arriving after interruption cannot introduce an action or evidence.
       const interrupted = this.interruption(state, context);
       if (interrupted) {
         entry.outcome = "stopped";
         update.termination = interrupted;
       } else {
+        // Both come from the model boundary; a malformed continuation is a model error.
         const conversation = conversationContinuationSchema.parse(
           reply.conversation,
         );
@@ -159,18 +100,28 @@ export class InvestigationOperations {
         const returned = returnedEvidence(state);
         if (action.basedOnToolCallIds.some((id) => !returned.has(id)))
           throw new InvalidOutput();
-        entry.action = action;
         if (action.name !== "finish" && action.checkpoint !== null) {
           this.validateCandidates(action.checkpoint, state, context);
           Object.assign(update, candidateCheckpointUpdate(action.checkpoint));
         }
-        update.conversation = conversation;
-        update.action = action;
+        entry.action = action;
         entry.outcome = "ok";
+        update.conversation = conversation;
+        if (action.name !== "finish" && budget.finishOnly)
+          // The checkpoint is kept; the requested inspection cannot be afforded.
+          update.termination = {
+            reason: "budget_exhausted",
+            limit:
+              budget.modelCallsAfterThis === 0 ? "modelCalls" : "toolCalls",
+          };
+        else update.action = action;
       }
     } catch (error) {
       const interrupted = this.interruption(state, context);
-      entry.outcome = interrupted && !invoked ? "stopped" : "error";
+      // Interruption before dispatch: nothing was sent, so nothing is counted.
+      if (interrupted && !invoked)
+        return { action: null, termination: interrupted };
+      entry.outcome = "error";
       update.termination = interrupted ?? {
         reason:
           error instanceof InvalidOutput
@@ -185,121 +136,76 @@ export class InvestigationOperations {
       };
     }
     if (!receivedUsage) usage.tokenUsageComplete = false;
-    return { ...update, ...this.closeAttempt(state, entry, begin, context) };
+    return { ...update, trace: this.close(state, entry, begin, context) };
   }
 
+  /** `execute_action`: run the chosen inspection or accept the final assessment. */
   async executeAction(
     state: InvestigationState,
     context: InvestigationContext,
-  ): Promise<Partial<InvestigationState>> {
-    if (!state.action) throw new Error("No prepared action");
-    const parsed = actionSchema.safeParse(state.action);
-    if (!parsed.success) throw new Error("Prepared action failed validation");
-    if (parsed.data.name === "finish") {
-      this.assertIdle(state);
-      const stopped = this.interruption(state, context);
-      return stopped
-        ? { action: null, termination: stopped }
-        : this.finishInvestigation(parsed.data, state, context);
-    }
-    return this.executeInspection(parsed.data, state, context);
+  ): Promise<Update> {
+    const action = state.action;
+    if (!action) throw new Error("No chosen action");
+    const stopped = this.interruption(state, context);
+    if (stopped) return { action: null, termination: stopped };
+    return action.name === "finish"
+      ? this.finish(action, state, context)
+      : this.inspect(action, state, context);
   }
 
-  private async finishInvestigation(
+  private finish(
     action: Extract<Action, { name: "finish" }>,
     state: InvestigationState,
     context: InvestigationContext,
-  ): Promise<Partial<InvestigationState>> {
+  ): Update {
     try {
       if (action.candidates.length > context.config.maxCandidates)
         throw new InvalidOutput();
       this.validateCandidates(action.candidates, state, context);
-      await context.execution.bounded(async (signal) => {
-        for (const reference of candidateReferences(action.candidates)) {
-          await context.inspector.execute(
-            "read_lines",
-            {
-              path: reference.path,
-              startLine: reference.startLine,
-              endLine: reference.endLine,
-            },
-            16_384,
-            signal,
-          );
-        }
-      });
-      const interrupted = this.interruption(state, context);
-      if (interrupted) return { action: null, termination: interrupted };
+    } catch {
       return {
         action: null,
-        finalCandidates: action.candidates,
-        scopeAndLimitations: [
-          ...state.scopeAndLimitations,
-          ...action.scopeAndLimitations,
-        ],
-        termination: { reason: "model_finished" },
-      };
-    } catch (error) {
-      return {
-        action: null,
-        termination: this.interruption(state, context) ?? {
-          reason:
-            error instanceof SnapshotChangedError
-              ? "snapshot_changed"
-              : error instanceof InvalidOutput
-                ? "invalid_model_output"
-                : "execution_error",
-          detail:
-            "Final candidates failed count, evidence, or snapshot validation",
+        termination: {
+          reason: "invalid_model_output",
+          detail: "Final candidates failed count or evidence validation",
         },
       };
     }
+    return {
+      action: null,
+      finalCandidates: action.candidates,
+      scopeAndLimitations: [
+        ...state.scopeAndLimitations,
+        ...action.scopeAndLimitations,
+      ],
+      termination: { reason: "model_finished" },
+    };
   }
 
-  private async executeInspection(
-    action: Exclude<Action, { name: "finish" }>,
+  private async inspect(
+    action: Inspection,
     state: InvestigationState,
     context: InvestigationContext,
-  ): Promise<Partial<InvestigationState>> {
-    const { entry, begin } = this.attempt(state, "tool");
-    const usage = { ...state.usage };
-    const toolCallId = entry.toolCallId!;
-    const {
-      name,
-      rationale: _rationale,
-      basedOnToolCallIds: _basis,
-      checkpoint: _checkpoint,
-      ...args
-    } = action;
-    if (!isDeepStrictEqual(entry.arguments, { name, ...args }))
-      throw new Error("Prepared tool arguments do not match its action");
-    const remaining =
-      context.config.limits.totalToolResponseBytes -
-      state.usage.toolResponseBytes;
-    const allowance = Math.min(
-      context.config.limits.toolResponseBytes,
-      remaining,
-    );
-    const envelopeBytes = serializedBytes({ toolCallId, result: null }) - 4;
-    const update: Partial<InvestigationState> = {
-      action: null,
-      pendingAttempt: null,
-      usage,
+  ): Promise<Update> {
+    const { limits } = context.config;
+    const usage = { ...state.usage, toolCalls: state.usage.toolCalls + 1 };
+    const toolCallId = `tool-${usage.toolCalls}`;
+    const { name, args } = inspectionArguments(action);
+    const entry: InvestigationTraceEvent = {
+      ...this.event(state, "tool"),
+      toolCallId,
+      arguments: { name, ...args },
     };
-    const stopped = this.interruption(state, context);
-    if (stopped) {
-      entry.outcome = "stopped";
-      return {
-        ...update,
-        termination: stopped,
-        ...this.closeAttempt(state, entry, begin, context),
-      };
-    }
+    const begin = context.execution.elapsedMs;
+    const remaining =
+      limits.totalToolResponseBytes - state.usage.toolResponseBytes;
+    const allowance = Math.min(limits.toolResponseBytes, remaining);
+    // The model receives `{toolCallId, result}`; the whole envelope is charged.
+    const envelopeBytes = serializedBytes({ toolCallId, result: null }) - 4;
+    const update: Update = { action: null, usage };
     let invoked = false;
     try {
-      const received = await context.execution.bounded((signal) => {
-        if (this.interruption(state, context))
-          throw new Error("Execution interrupted before inspection invocation");
+      const result = await context.execution.bounded((signal) => {
         invoked = true;
         return context.inspector.execute(
           name,
@@ -313,85 +219,66 @@ export class InvestigationOperations {
         entry.outcome = "stopped";
         update.termination = interrupted;
       } else {
-        const response = inspectionResultSchema.parse(received);
-        if (
-          response.kind !== "error" &&
-          (response.snapshotId !== context.snapshot.snapshotId ||
-            response.kind !== name)
-        )
-          throw new SnapshotChangedError();
-        const bytes = serializedBytes({ toolCallId, result: response });
-        if (bytes > allowance) throw new OutputBudgetError();
-        usage.toolResponseBytes += bytes;
-        entry.result = response;
-        entry.outcome = response.kind === "error" ? "error" : "ok";
+        usage.toolResponseBytes += serializedBytes({ toolCallId, result });
+        entry.result = result;
+        entry.outcome = result.kind === "error" ? "error" : "ok";
       }
     } catch (error) {
       const interrupted = this.interruption(state, context);
-      entry.outcome = interrupted && !invoked ? "stopped" : "error";
+      if (interrupted && !invoked)
+        return { action: null, termination: interrupted };
+      entry.outcome = "error";
       update.termination =
         interrupted ??
         (error instanceof OutputBudgetError
           ? {
               reason: "budget_exhausted",
               limit:
-                remaining < context.config.limits.toolResponseBytes
+                remaining < limits.toolResponseBytes
                   ? "totalToolResponseBytes"
                   : "toolResponseBytes",
             }
-          : {
-              reason:
-                error instanceof SnapshotChangedError
-                  ? "snapshot_changed"
-                  : "execution_error",
-            });
+          : { reason: "execution_error" });
     }
-    return { ...update, ...this.closeAttempt(state, entry, begin, context) };
+    return { ...update, trace: this.close(state, entry, begin, context) };
   }
 
-  private assertIdle(state: InvestigationState): void {
-    if (state.pendingAttempt) throw new Error("An attempt is already pending");
-  }
-
-  private attempt(
+  /** What remains after the model call about to be made. */
+  private budget(
     state: InvestigationState,
-    type: InvestigationTraceEvent["type"],
-  ) {
-    const pending = state.pendingAttempt;
-    const entry = state.trace.at(-1);
-    if (
-      !pending ||
-      !entry ||
-      entry.id !== pending.eventId ||
-      entry.type !== type ||
-      entry.outcome !== "pending" ||
-      (type === "tool" && !entry.toolCallId)
-    )
-      throw new Error("No matching prepared attempt");
-    return { entry: structuredClone(entry), begin: pending.startedElapsedMs };
+    context: InvestigationContext,
+  ): ModelBudget {
+    const { limits } = context.config;
+    const modelCallsAfterThis = limits.modelCalls - state.usage.modelCalls - 1;
+    const inspections = limits.toolCalls - state.usage.toolCalls;
+    return {
+      modelCallsAfterThis,
+      inspections,
+      toolResponseBytes:
+        limits.totalToolResponseBytes - state.usage.toolResponseBytes,
+      milliseconds: Math.max(
+        0,
+        Math.floor(limits.elapsedMs - context.execution.elapsedMs),
+      ),
+      finishOnly: modelCallsAfterThis === 0 || inspections === 0,
+    };
   }
 
-  private closeAttempt(
+  private close(
     state: InvestigationState,
     entry: InvestigationTraceEvent,
     begin: number,
     context: InvestigationContext,
-  ): Partial<InvestigationState> {
+  ): InvestigationTraceEvent[] {
     entry.durationMs = context.execution.elapsedMs - begin;
-    return {
-      pendingAttempt: null,
-      trace: [...state.trace.slice(0, -1), entry],
-    };
+    return [...state.trace, entry];
   }
 
   private interruption(
     state: InvestigationState,
     context: InvestigationContext,
   ): Termination | null {
-    if (state.termination) return state.termination;
-    if (state.snapshotId !== context.snapshot.snapshotId)
-      return { reason: "snapshot_changed" };
-    return context.execution.interruption();
+    return state.termination ?? context.execution.interruption();
   }
 
   private event(
@@ -403,7 +290,7 @@ export class InvestigationOperations {
       type,
       startedAt: new Date().toISOString(),
       durationMs: 0,
-      outcome: "pending",
+      outcome: "ok",
     };
   }
 
@@ -425,4 +312,19 @@ export class InvestigationOperations {
         throw new InvalidOutput();
     }
   }
+}
+
+/** Tool arguments are the action without its model-facing metadata. */
+export function inspectionArguments(action: Inspection): {
+  name: Inspection["name"];
+  args: Record<string, unknown>;
+} {
+  const {
+    name,
+    rationale: _rationale,
+    basedOnToolCallIds: _basis,
+    checkpoint: _checkpoint,
+    ...args
+  } = action;
+  return { name, args };
 }

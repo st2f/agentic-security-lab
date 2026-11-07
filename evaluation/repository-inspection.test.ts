@@ -18,7 +18,6 @@ import {
   RepositoryInspector,
   OutputBudgetError,
   serializedBytes,
-  SnapshotChangedError,
 } from "../src/infrastructure/repository/RepositoryInspector.ts";
 import {
   digest,
@@ -340,67 +339,20 @@ test("listing obeys response bytes and search resumes without skipping or repeat
   assert.equal(new Set(matches).size, 30);
 });
 
-test("modified, deleted, or symlink-replaced snapshot files fail closed before returning evidence", async (t) => {
-  for (const mode of [
-    "modify",
-    "delete",
-    "file_link",
-    "directory_link",
-    "oversize",
-  ]) {
-    const { root, inspector } = await sample(t, {
-      "src/item.ts": "original\n",
-    });
-    const file = path.join(root, "src/item.ts");
-    if (mode === "modify") await writeFile(file, "changed\n");
-    if (mode === "oversize")
-      await writeFile(file, "x".repeat(snapshotPolicy.maxFileBytes + 1));
-    if (mode === "delete") await unlink(file);
-    if (mode === "file_link") {
-      const outside = await temporary(t);
-      await writeFile(path.join(outside, "secret.ts"), "outside\n");
-      await unlink(file);
-      await symlink(path.join(outside, "secret.ts"), file);
-    }
-    if (mode === "directory_link") {
-      const outside = await temporary(t);
-      await writeFile(path.join(outside, "item.ts"), "outside\n");
-      await rm(path.join(root, "src"), { recursive: true });
-      await symlink(outside, path.join(root, "src"));
-    }
-    await assert.rejects(
-      inspector.execute("read_lines", { path: "src/item.ts" }),
-      SnapshotChangedError,
-      mode,
-    );
-    await assert.rejects(
-      inspector.execute("search_text", { query: "original" }),
-      SnapshotChangedError,
-      mode,
-    );
-  }
-});
-
-test("inspector access and integrity checks use a copied manifest", async (t) => {
+test("inspector access uses a copied manifest", async (t) => {
   const { root, snapshot, inspector } = await sample(t, {
     "src/item.ts": "original\n",
   });
-  // Rewriting caller-owned metadata cannot authorize another file or a changed hash.
+  // Rewriting caller-owned metadata cannot authorize another file.
   await writeFile(path.join(root, "outside.ts"), "private\n");
   snapshot.files = [
     ...snapshot.files,
     { path: "outside.ts", sha256: digest("private\n") },
   ];
-  snapshot.files[0]!.sha256 = digest("changed\n");
   const listing = await inspector.execute("list_files", {});
   assert.equal(listing.kind, "list_files");
   if (listing.kind === "list_files")
     assert.deepEqual(listing.files, ["src/item.ts"]);
   const denied = await inspector.execute("read_lines", { path: "outside.ts" });
   assert.equal(denied.kind, "error");
-  await writeFile(path.join(root, "src/item.ts"), "changed\n");
-  await assert.rejects(
-    inspector.execute("read_lines", { path: "src/item.ts" }),
-    SnapshotChangedError,
-  );
 });

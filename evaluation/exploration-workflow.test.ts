@@ -98,7 +98,7 @@ async function validate(
   );
 }
 
-test("cancellation after committed model or inspection preparation dispatches no reserved work", async (t) => {
+test("cancellation observed by a node before dispatch counts and records no call", async (t) => {
   for (const kind of ["model", "tool"] as const) {
     const dependencies = await fixture(t, kind);
     const controller = new AbortController();
@@ -119,15 +119,12 @@ test("cancellation after committed model or inspection preparation dispatches no
         return inspector.execute(...args);
       },
     };
-    const method = kind === "model" ? "requestAction" : "executeAction";
+    const method = kind === "model" ? "chooseAction" : "executeAction";
     const original = operations[method].bind(operations);
     t.mock.method(
       operations,
       method,
       async (state: InvestigationState, context: InvestigationContext) => {
-        assert.equal(state.pendingAttempt!.eventId, state.trace.at(-1)!.id);
-        assert.equal(state.trace.at(-1)!.type, kind);
-        assert.equal(state.trace.at(-1)!.outcome, "pending");
         controller.abort();
         return original(state, context);
       },
@@ -137,60 +134,18 @@ test("cancellation after committed model or inspection preparation dispatches no
       dependencies,
     ).run(controller.signal);
     assert.equal(result.termination.reason, "cancelled");
-    assert.equal(result.usage.modelCalls, 1);
-    assert.equal(result.usage.toolCalls, kind === "tool" ? 1 : 0);
-    assert.equal(result.usage.tokenUsageComplete, kind === "tool");
+    assert.equal(result.usage.modelCalls, kind === "tool" ? 1 : 0);
+    assert.equal(result.usage.toolCalls, 0);
+    assert.equal(result.usage.tokenUsageComplete, true);
     assert.equal(modelCalls, kind === "tool" ? 1 : 0);
     assert.equal(toolCalls, 0);
-    assert.equal(result.trace.at(-1)!.outcome, "stopped");
-    assert.equal(result.trace.at(-1)!.result, undefined);
+    assert.equal(result.trace.length, kind === "tool" ? 1 : 0);
     await validate(result, dependencies);
   }
 });
 
-test("cancellation before inspection preparation allocates no inspection attempt", async (t) => {
+test("a failed inspection node keeps committed progress without inventing a tool event", async (t) => {
   const dependencies = await fixture(t);
-  const controller = new AbortController();
-  const operations = new InvestigationOperations();
-  const prepare = operations.prepareAction.bind(operations);
-  t.mock.method(
-    operations,
-    "prepareAction",
-    (state: InvestigationState, context: InvestigationContext) => {
-      assert.equal(state.pendingAttempt, null);
-      controller.abort();
-      return prepare(state, context);
-    },
-  );
-  let inspections = 0;
-  dependencies.inspector = {
-    async execute() {
-      inspections++;
-      throw new Error("must not inspect");
-    },
-  };
-  const result = await runner(
-    new ExplorationWorkflow(operations),
-    dependencies,
-  ).run(controller.signal);
-  assert.equal(result.termination.reason, "cancelled");
-  assert.equal(result.usage.modelCalls, 1);
-  assert.equal(result.usage.toolCalls, 0);
-  assert.equal(inspections, 0);
-  assert.equal(result.trace.length, 1);
-  assert.equal(result.trace[0]!.outcome, "ok");
-  await validate(result, dependencies);
-});
-
-test("a failed inspection node retains its committed reservation with no invented result or response bytes", async (t) => {
-  const dependencies = await fixture(t);
-  let invocations = 0;
-  dependencies.inspector = {
-    async execute() {
-      invocations++;
-      throw new Error("must not enter inspector");
-    },
-  };
   const operations = new InvestigationOperations();
   const execute = t.mock.method(operations, "executeAction", async () => {
     throw new Error("node failed before inspection");
@@ -199,17 +154,13 @@ test("a failed inspection node retains its committed reservation with no invente
     new ExplorationWorkflow(operations),
     dependencies,
   ).run();
-  assert.equal(invocations, 0);
   assert.equal(execute.mock.callCount(), 1);
   assert.equal(result.termination.reason, "execution_error");
   assert.equal(result.usage.modelCalls, 1);
-  assert.equal(result.usage.toolCalls, 1);
+  assert.equal(result.usage.toolCalls, 0);
   assert.equal(result.usage.toolResponseBytes, 0);
   assert.equal(result.usage.tokenUsageComplete, true);
-  assert.equal(result.trace.length, 2);
-  assert.equal(result.trace[1]!.outcome, "pending");
-  assert.equal(result.trace[1]!.toolCallId, "tool-1");
-  assert.equal(result.trace[1]!.result, undefined);
+  assert.equal(result.trace.length, 1);
   await validate(result, dependencies);
 });
 
@@ -246,11 +197,11 @@ test("one compiled workflow isolates concurrent invocation state and receives st
   first.model = model;
   second.model = model;
   const operations = new InvestigationOperations();
-  const prepare = operations.prepareModel.bind(operations);
+  const choose = operations.chooseAction.bind(operations);
   const contexts = new Map<string, InvestigationContext>();
   t.mock.method(
     operations,
-    "prepareModel",
+    "chooseAction",
     (state: InvestigationState, context: InvestigationContext) => {
       const own = dependencies.find(
         (item) => item.config.question === state.runId,
@@ -264,7 +215,7 @@ test("one compiled workflow isolates concurrent invocation state and receives st
       if (contexts.has(state.runId))
         assert.equal(context, contexts.get(state.runId));
       else contexts.set(state.runId, context);
-      return prepare(state, context);
+      return choose(state, context);
     },
   );
   const workflow = new ExplorationWorkflow(operations);
@@ -286,7 +237,7 @@ test("one compiled workflow isolates concurrent invocation state and receives st
   assert.notEqual(contexts.get("first"), contexts.get("second"));
 });
 
-test("four-node rounds exhaust the application budget before the graph recursion safeguard", async (t) => {
+test("two-node rounds exhaust the application budget before the graph recursion safeguard", async (t) => {
   const dependencies = await fixture(t);
   dependencies.config = configSchema.parse({
     limits: { ...defaultLimits, modelCalls: 3 },
@@ -299,9 +250,10 @@ test("four-node rounds exhaust the application budget before the graph recursion
     reason: "budget_exhausted",
     limit: "modelCalls",
   });
+  // The third call may only finish; its requested inspection is not executed.
   assert.equal(result.usage.modelCalls, 3);
-  assert.equal(result.usage.toolCalls, 3);
-  assert.equal(result.trace.length, 6);
+  assert.equal(result.usage.toolCalls, 2);
+  assert.equal(result.trace.length, 5);
   assert.ok(result.trace.every((event) => event.outcome === "ok"));
   await validate(result, dependencies);
 });

@@ -48,7 +48,9 @@ The application supplies the snapshot identity on every evidence reference; do n
 Trace relevant relationships across entry points, queries, security checks, and persistence where useful.
 Findings are hypotheses supported by source, not proof of runtime behavior or exploitability.
 State uncertainties and suggested next checks. Do not fill a candidate quota or invent weaknesses.
-Finish within the provided limits. Zero credible candidates does not establish security.
+Every request reports remainingBudget. Plan your inspections so you can finish within it.
+When remainingBudget.finishOnly is true, only finish is available: submit your assessment.
+Zero credible candidates does not establish security.
 Never request or reveal hidden chain-of-thought; provide only short action rationales.`;
 
 /** Provider translation; conversation progress is supplied and returned as wire data. */
@@ -76,7 +78,7 @@ export class OpenAIActionModel implements ActionModel {
             "Explore the repository for credible security risks.",
           snapshotId: input.snapshotId,
           maxCandidates: input.config.maxCandidates,
-          limits: input.config.limits,
+          remainingBudget: input.budget,
         }),
       });
     } else {
@@ -85,7 +87,10 @@ export class OpenAIActionModel implements ActionModel {
       history.push({
         type: "function_call_output",
         call_id: input.conversation.pendingCallId,
-        output: JSON.stringify(input.observation),
+        output: JSON.stringify({
+          ...input.observation,
+          remainingBudget: input.budget,
+        }),
       });
     }
     const response = await this.client.responses
@@ -96,7 +101,9 @@ export class OpenAIActionModel implements ActionModel {
           instructions,
           input: history,
           tools,
-          tool_choice: "required",
+          tool_choice: input.budget.finishOnly
+            ? { type: "function", name: "finish" }
+            : "required",
           parallel_tool_calls: false,
           max_output_tokens: 8192,
           store: false,

@@ -48,7 +48,7 @@ Omit `--question` for open exploration. Other options are:
 | `--elapsed-ms`                  | 180,000 milliseconds                      |
 | `--output`                      | `priv/runs`                               |
 
-Tool-response limits default to 16 KiB per envelope and 256 KiB cumulatively. These are configurable through programmatic `limits`; the CLI exposes the options above.
+The model sees its remaining budget on every turn, and its last affordable call can only finish. Each model call requests at most one inspection, so with the defaults the model-call limit is reached first. Tool-response limits default to 16 KiB per envelope and 256 KiB cumulatively. These are configurable through programmatic `limits`; the CLI exposes the options above.
 
 Unset `LANGSMITH_TRACING`, `LANGSMITH_TRACING_V2`, `LANGCHAIN_TRACING`, `LANGCHAIN_TRACING_V2`, and `LANGCHAIN_VERBOSE`, or set them to `false`. A value of `true` stops the investigation before dispatch to prevent raw framework diagnostics from exposing internal conversation.
 

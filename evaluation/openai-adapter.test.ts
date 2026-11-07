@@ -12,6 +12,14 @@ import {
   modelActionSchemas,
 } from "../src/investigation/contracts.ts";
 
+const budget: ModelInput["budget"] = {
+  modelCallsAfterThis: 11,
+  inspections: 40,
+  toolResponseBytes: 262_144,
+  milliseconds: 180_000,
+  finishOnly: false,
+};
+
 function deepFreeze(value: unknown): void {
   if (value && typeof value === "object") {
     Object.freeze(value);
@@ -125,6 +133,7 @@ test("OpenAI adapter preserves reasoning and function output correlation across 
   const input: ModelInput = {
     snapshotId: "snapshot",
     config,
+    budget,
     observation: null,
     conversation: { history: [], pendingCallId: null },
   };
@@ -141,6 +150,7 @@ test("OpenAI adapter preserves reasoning and function output correlation across 
     {
       snapshotId: "snapshot",
       config,
+      budget,
       observation: { toolCallId: "tool-1", result: { files: ["query.ts"] } },
       conversation: JSON.parse(JSON.stringify(first.conversation)),
     },
@@ -171,6 +181,11 @@ test("OpenAI adapter preserves reasoning and function output correlation across 
   );
   assert.equal(observation?.call_id, "provider-call-1");
   assert.equal(JSON.parse(observation!.output!).toolCallId, "tool-1");
+  assert.deepEqual(JSON.parse(observation!.output!).remainingBudget, budget);
+  const task = JSON.parse(
+    (bodies[0]!.input as { content: string }[])[0]!.content,
+  );
+  assert.deepEqual(task.remainingBudget, budget);
   assert.equal(bodies[0]!.model, "gpt-6-luna");
   assert.equal(bodies[0]!.store, false);
   assert.equal(bodies[0]!.parallel_tool_calls, false);
@@ -212,6 +227,7 @@ test("provider failures are not retried and diagnostics omit provider payloads",
       {
         snapshotId: "snapshot",
         config: configSchema.parse({}),
+        budget,
         observation: null,
         conversation: { history: [], pendingCallId: null },
       },
@@ -252,6 +268,7 @@ test("one adapter isolates interleaved conversations and replays identical conti
   const inputs: ModelInput[] = ["run-a", "run-b"].map((question) => ({
     snapshotId: question,
     config: configSchema.parse({ question }),
+    budget,
     observation: null,
     conversation: { history: [], pendingCallId: null },
   }));
@@ -325,6 +342,7 @@ test("provider and cancellation failures leave continuation unchanged for a call
     const input: ModelInput = {
       snapshotId: "snapshot",
       config: configSchema.parse({}),
+      budget,
       observation: { toolCallId: "tool-1", result: { files: ["query.ts"] } },
       conversation: {
         history: [
@@ -372,6 +390,7 @@ test("missing tool correlation fails before HTTP without modifying caller contin
   const input: ModelInput = {
     snapshotId: "snapshot",
     config: configSchema.parse({}),
+    budget,
     observation: { toolCallId: "tool-1", result: {} },
     conversation: {
       history: [{ role: "user", content: "existing conversation" }],
@@ -479,4 +498,31 @@ test("snapshot identity is supplied from run context for final and checkpoint re
     bindModelAction({ ...finish, candidates: [typo] }, snapshotId),
     null,
   );
+});
+
+test("a finish-only turn forces the finish tool at the provider", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const client = new OpenAI({
+    maxRetries: 0,
+    apiKey: "test-key-not-a-secret",
+    fetch: async (input, init) => {
+      bodies.push(JSON.parse(await new Request(input, init).text()));
+      return providerReply("finish", "provider-call-1");
+    },
+  });
+  const reply = await new OpenAIActionModel(client).requestAction(
+    {
+      snapshotId: "snapshot",
+      config: configSchema.parse({}),
+      observation: null,
+      conversation: { history: [], pendingCallId: null },
+      budget: { ...budget, modelCallsAfterThis: 0, finishOnly: true },
+    },
+    new AbortController().signal,
+  );
+  assert.equal((reply.action as { name: string } | null)?.name, "finish");
+  assert.deepEqual(bodies[0]!.tool_choice, {
+    type: "function",
+    name: "finish",
+  });
 });
