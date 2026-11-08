@@ -12,7 +12,7 @@ Start at [`src/composition.ts`](../src/composition.ts). `createInvestigation` co
 | [InvestigationRunner](../src/investigation/InvestigationRunner.ts) | Start execution resources, retain committed progress for failure recovery, clean up and project the result |
 | [ExplorationWorkflow](../src/workflows/ExplorationWorkflow.ts) | Compile nodes and conditional routes; supply invocation dependencies through runtime context |
 | [InvestigationOperations](../src/investigation/InvestigationOperations.ts) | Read explicit state/context and return updates: validate actions, enforce limits, inspect source and accept completion |
-| [OpenAIActionModel](../src/infrastructure/ai/OpenAIActionModel.ts) | Translate conversation data and tool schemas into provider requests; return action, continuation and usage |
+| [OpenAIActionModel](../src/infrastructure/ai/OpenAIActionModel.ts) | Translate the application's message, allowed actions and conversation into provider requests; return action, continuation and usage. The prompt and tool descriptions are application-owned ([prompt](../src/investigation/prompt.ts)) |
 | [RepositoryInspector](../src/infrastructure/repository/RepositoryInspector.ts) | Provide bounded listing, literal search and reading inside the prepared source boundary |
 | [ReportValidator](../src/reporting/ReportValidator.ts), [ReportRenderer](../src/reporting/ReportRenderer.ts) and [saved-report I/O](../src/reporting/saved-report.ts) | Independently validate saved artifacts and evidence, render Markdown and write the report |
 
@@ -27,9 +27,7 @@ The workflow is the standard two-node agent loop, `choose_action → execute_act
 
 For example, reading a function may lead the model to search for its callers or inspect a referenced implementation. The application supplies permitted operations and validates evidence; it does not choose that follow-up or prescribe a file order.
 
-Every model request carries a `remainingBudget`: model calls after this one, inspections, response bytes and milliseconds. When no later model call could use another observation, because this is the last model call or no inspections remain, the budget is marked `finishOnly`. The adapter then forces the `finish` tool at the provider. If a model still requests an inspection on such a turn, the application keeps its validated checkpoint and ends the run as `budget_exhausted`. Each model call yields at most one inspection, so with the default limits the model-call limit is reached first.
-
-A call is counted and traced when it is dispatched. Interruption observed before dispatch creates no event and no count. Each node returns its whole update at the end, so a node that fails unexpectedly leaves the last committed state, without an entry for its call.
+The model is informed of its remaining budget for both model calls and tool calls at each step. On its final allowed model call, it must submit its hypotheses using finish. The application independently enforces all budget limits and counts model and tool calls only when they are actually made, not when they are planned.
 
 ## State, dependencies and lifecycle
 

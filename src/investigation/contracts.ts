@@ -238,23 +238,32 @@ export type ConversationContinuation = z.infer<
   typeof conversationContinuationSchema
 >;
 
-/** Remaining allowances shown to the model on every turn; the application still enforces them. */
+/**
+ * Remaining allowances shown to the model on each call; the application enforces them.
+ * `modelCallsLeft` does not include the current call: the last allowed call reports 0.
+ */
 export type ModelBudget = {
-  modelCallsAfterThis: number;
-  inspections: number;
-  toolResponseBytes: number;
-  milliseconds: number;
-  /** Only `finish` is permitted: no later model call could use another observation. */
-  finishOnly: boolean;
+  modelCallsLeft: number;
+  toolCallsLeft: number;
+  toolResponseBytesLeft: number;
+  millisecondsLeft: number;
 };
 
-// A narrow call boundary for deterministic testing, not a provider routing system.
+export type ActionName = Action["name"];
+
+/**
+ * A narrow, provider-neutral call boundary. The application decides what the model is
+ * told (`message`) and which actions it may choose; adapters only translate them.
+ */
 export type ModelInput = {
+  model: string;
+  reasoning: RunConfig["reasoning"];
+  /** Binds model-selected evidence references to the trusted snapshot identity. */
   snapshotId: string;
-  config: RunConfig;
-  observation: { toolCallId: string; result: unknown } | null;
   conversation: ConversationContinuation;
-  budget: ModelBudget;
+  /** First call: the task. Later calls: the latest observation for the pending tool call. */
+  message: JsonObject;
+  allowedActions: ActionName[];
 };
 export type ModelReply = {
   action: unknown;

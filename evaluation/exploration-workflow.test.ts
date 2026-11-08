@@ -171,23 +171,21 @@ test("one compiled workflow isolates concurrent invocation state and receives st
   const model: ActionModel = {
     async requestAction(input) {
       const own = dependencies.find(
-        (item) => item.config.question === input.config.question,
+        (item) => item.snapshot.snapshotId === input.snapshotId,
       )!;
-      assert.equal(input.snapshotId, own.snapshot.snapshotId);
+      const invocation = own.config.question!;
       const following = input.conversation.history.length > 0;
       if (following) {
-        assert.deepEqual(input.conversation.history, [
-          { invocation: input.config.question! },
-        ]);
+        assert.deepEqual(input.conversation.history, [{ invocation }]);
         assert.equal(
-          (input.observation!.result as { snapshotId: string }).snapshotId,
+          (input.message.result as { snapshotId: string }).snapshotId,
           input.snapshotId,
         );
-      }
+      } else assert.equal(input.message.task, invocation);
       return {
         action: following ? finish : read,
         conversation: {
-          history: [{ invocation: input.config.question! }],
+          history: [{ invocation }],
           pendingCallId: null,
         },
         usage: { inputTokens: 10, outputTokens: 5 },
@@ -250,10 +248,11 @@ test("two-node rounds exhaust the application budget before the graph recursion 
     reason: "budget_exhausted",
     limit: "modelCalls",
   });
-  // The third call may only finish; its requested inspection is not executed.
+  // The scripted model ignores the finish-only offer on its last call: its
+  // inspection runs, and the model-call limit then ends the run.
   assert.equal(result.usage.modelCalls, 3);
-  assert.equal(result.usage.toolCalls, 2);
-  assert.equal(result.trace.length, 5);
+  assert.equal(result.usage.toolCalls, 3);
+  assert.equal(result.trace.length, 6);
   assert.ok(result.trace.every((event) => event.outcome === "ok"));
   await validate(result, dependencies);
 });
@@ -269,7 +268,7 @@ test("committed progress streams omit continuation and dependencies and cannot m
           history: [{ encrypted_content: secret }],
           pendingCallId: "private-provider-call",
         });
-        assert.equal(input.observation!.toolCallId, "tool-1");
+        assert.equal(input.message.toolCallId, "tool-1");
       }
       return {
         action: calls === 1 ? read : finish,

@@ -8,9 +8,11 @@ import { configSchema, defaultLimits } from "../src/investigation/contracts.ts";
 import type {
   Action,
   Candidate,
+  ModelBudget,
   ModelInput,
   ModelReply,
 } from "../src/investigation/contracts.ts";
+import { defaultTask } from "../src/investigation/prompt.ts";
 import type { InvestigationContext } from "../src/investigation/context.ts";
 import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
 import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
@@ -227,17 +229,14 @@ test("each operation counts its own call once and records one trace event", asyn
   });
 });
 
-test("every model call reports the remaining budget; the last affordable call permits only finish", async (t) => {
+test("every model call reports the remaining budget; only finish is offered when nothing could follow", async (t) => {
   const f = await fixture(t);
-  const budgets: ModelInput["budget"][] = [];
+  const inputs: ModelInput[] = [];
   f.context.model = {
     async requestAction(input) {
-      budgets.push(input.budget);
+      inputs.push(structuredClone(input));
       return {
-        action: {
-          ...read,
-          checkpoint: input.observation ? [f.candidate] : null,
-        },
+        action: read,
         conversation: input.conversation,
         usage: { inputTokens: 10, outputTokens: 5 },
       };
@@ -249,37 +248,51 @@ test("every model call reports the remaining budget; the last affordable call pe
   let state = await step(f.state, f.context, "chooseAction");
   state = await step(state, f.context, "executeAction");
   state = await step(state, f.context, "chooseAction");
+  const budgets = inputs.map((input) => input.message.budget as ModelBudget);
   assert.deepEqual(
-    budgets.map((budget) => [budget.modelCallsAfterThis, budget.finishOnly]),
+    budgets.map((budget) => [budget.modelCallsLeft, budget.toolCallsLeft]),
     [
-      [1, false],
-      [0, true],
+      [1, defaultLimits.toolCalls],
+      [0, defaultLimits.toolCalls - 1],
     ],
   );
-  assert.equal(budgets[1]!.inspections, defaultLimits.toolCalls - 1);
   assert.equal(
-    budgets[1]!.toolResponseBytes,
+    budgets[1]!.toolResponseBytesLeft,
     defaultLimits.totalToolResponseBytes - state.usage.toolResponseBytes,
   );
-  // An inspection on a finish-only turn is unaffordable, but its checkpoint is kept.
+  assert.equal(inputs[0]!.message.task, defaultTask);
+  assert.equal(inputs[1]!.message.toolCallId, "tool-1");
+  assert.deepEqual(inputs[0]!.allowedActions, [
+    "list_files",
+    "search_text",
+    "read_lines",
+    "finish",
+  ]);
+  assert.deepEqual(inputs[1]!.allowedActions, ["finish"]);
+  // A model ignoring the restriction gains one inspection, never another model call.
+  assert.equal(state.termination, null);
+  state = await step(state, f.context, "executeAction");
+  assert.equal(state.usage.toolCalls, 2);
+  state = await step(state, f.context, "chooseAction");
   assert.deepEqual(state.termination, {
     reason: "budget_exhausted",
     limit: "modelCalls",
   });
-  assert.equal(state.action, null);
-  assert.deepEqual(state.provisionalCandidates, [f.candidate]);
-  assert.equal(state.trace.at(-1)!.outcome, "ok");
+  assert.equal(state.usage.modelCalls, 2);
 
-  budgets.length = 0;
+  // With no tool calls left, only finish is offered and an inspection is refused.
   f.context.config = configSchema.parse({});
-  const toolLimited = await step(
+  let toolLimited = await step(
     { ...f.state, usage: { ...f.state.usage, toolCalls: 40 } },
     f.context,
     "chooseAction",
   );
-  assert.equal(budgets[0]!.inspections, 0);
-  assert.equal(budgets[0]!.finishOnly, true);
-  assert.equal(toolLimited.termination!.limit, "toolCalls");
+  assert.deepEqual(inputs.at(-1)!.allowedActions, ["finish"]);
+  toolLimited = await step(toolLimited, f.context, "executeAction");
+  assert.deepEqual(toolLimited.termination, {
+    reason: "budget_exhausted",
+    limit: "toolCalls",
+  });
   assert.equal(toolLimited.usage.toolCalls, 40);
 });
 
@@ -287,7 +300,7 @@ test("operations return updates over frozen state without retaining progress or 
   const f = await fixture(t);
   f.context.model = {
     async requestAction(input) {
-      input.config.limits.modelCalls = 100;
+      input.message.maxCandidates = 100;
       input.conversation.history.push({
         role: "user",
         content: input.snapshotId,
@@ -309,7 +322,7 @@ test("operations return updates over frozen state without retaining progress or 
   assert.equal(first.trace[0]!.id, "event-1");
   assert.equal(second.trace[0]!.id, "event-1");
   assert.deepEqual(f.state.conversation.history, []);
-  assert.equal(f.context.config.limits.modelCalls, 12);
+  assert.equal(f.context.config.maxCandidates, 3);
   const inspected = await step(first, f.context, "executeAction");
   assert.equal(inspected.usage.toolCalls, 1);
   assert.equal(

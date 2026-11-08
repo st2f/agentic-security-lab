@@ -252,9 +252,8 @@ test("production composition connects inspection to the adapter with a fresh con
     const output = JSON.parse(observation!.output!);
     assert.equal(output.toolCallId, "tool-1");
     assert.deepEqual(output.result, result.trace[1]!.result);
-    assert.equal(output.remainingBudget.modelCallsAfterThis, 10);
-    assert.equal(output.remainingBudget.inspections, 39);
-    assert.equal(output.remainingBudget.finishOnly, false);
+    assert.equal(output.budget.modelCallsLeft, 10);
+    assert.equal(output.budget.toolCallsLeft, 39);
     assert.equal(
       (result.trace[1]!.result as { path: string }).path,
       "query.ts",
@@ -275,7 +274,7 @@ test("graph follows a prior result and returns source-supported hypotheses with 
       checkpoint: null,
     }),
     (input) => {
-      const observed = input.observation as {
+      const observed = input.message as {
         toolCallId: string;
         result: { files: string[] };
       };
@@ -453,10 +452,7 @@ test("denied tool arguments return observations and do not escape the snapshot",
     scripted([
       () => ({ ...read(), path: "../docs/experiments/inventory-fixture.md" }),
       (input) => {
-        assert.equal(
-          (input.observation?.result as { kind: string }).kind,
-          "error",
-        );
+        assert.equal((input.message.result as { kind: string }).kind, "error");
         return finish();
       },
     ]),

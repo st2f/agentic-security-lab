@@ -5,7 +5,9 @@ import {
 } from "./contracts.ts";
 import type {
   Action,
+  ActionName,
   Candidate,
+  JsonObject,
   ModelBudget,
   Termination,
 } from "./contracts.ts";
@@ -21,6 +23,7 @@ import {
   returnedEvidence,
 } from "./state.ts";
 import type { InvestigationState, InvestigationTraceEvent } from "./state.ts";
+import { defaultTask } from "./prompt.ts";
 import {
   OutputBudgetError,
   serializedBytes,
@@ -30,6 +33,13 @@ class InvalidOutput extends Error {}
 
 type Update = Partial<InvestigationState>;
 type Inspection = Exclude<Action, { name: "finish" }>;
+
+const allActions: ActionName[] = [
+  "list_files",
+  "search_text",
+  "read_lines",
+  "finish",
+];
 
 /** Investigation policy over explicit state; retains no run progress. */
 export class InvestigationOperations {
@@ -47,6 +57,20 @@ export class InvestigationOperations {
         termination: { reason: "budget_exhausted", limit: "modelCalls" },
       };
     const budget = this.budget(state, context);
+    // If no model call or tool call is left, the model could not use another
+    // tool result, so only the final action is offered.
+    const allowedActions: ActionName[] =
+      budget.modelCallsLeft === 0 || budget.toolCallsLeft === 0
+        ? ["finish"]
+        : allActions;
+    const observation = latestObservation(state);
+    const message: JsonObject = observation
+      ? { ...(observation as unknown as JsonObject), budget }
+      : {
+          task: context.config.question ?? defaultTask,
+          maxCandidates: context.config.maxCandidates,
+          budget,
+        };
     const usage = { ...state.usage, modelCalls: state.usage.modelCalls + 1 };
     const entry = this.event(state, "model");
     const begin = context.execution.elapsedMs;
@@ -58,11 +82,12 @@ export class InvestigationOperations {
         invoked = true;
         return context.model.requestAction(
           {
+            model: context.config.model,
+            reasoning: context.config.reasoning,
             snapshotId: context.snapshot.snapshotId,
-            config: structuredClone(context.config),
-            observation: latestObservation(state),
             conversation: structuredClone(state.conversation),
-            budget,
+            message,
+            allowedActions,
           },
           signal,
         );
@@ -107,14 +132,7 @@ export class InvestigationOperations {
         entry.action = action;
         entry.outcome = "ok";
         update.conversation = conversation;
-        if (action.name !== "finish" && budget.finishOnly)
-          // The checkpoint is kept; the requested inspection cannot be afforded.
-          update.termination = {
-            reason: "budget_exhausted",
-            limit:
-              budget.modelCallsAfterThis === 0 ? "modelCalls" : "toolCalls",
-          };
-        else update.action = action;
+        update.action = action;
       }
     } catch (error) {
       const interrupted = this.interruption(state, context);
@@ -188,6 +206,11 @@ export class InvestigationOperations {
     context: InvestigationContext,
   ): Promise<Update> {
     const { limits } = context.config;
+    if (state.usage.toolCalls >= limits.toolCalls)
+      return {
+        action: null,
+        termination: { reason: "budget_exhausted", limit: "toolCalls" },
+      };
     const usage = { ...state.usage, toolCalls: state.usage.toolCalls + 1 };
     const toolCallId = `tool-${usage.toolCalls}`;
     const { name, args } = inspectionArguments(action);
@@ -243,24 +266,21 @@ export class InvestigationOperations {
     return { ...update, trace: this.close(state, entry, begin, context) };
   }
 
-  /** What remains after the model call about to be made. */
+  /** Remaining allowances; `modelCallsLeft` excludes the call about to be made. */
   private budget(
     state: InvestigationState,
     context: InvestigationContext,
   ): ModelBudget {
     const { limits } = context.config;
-    const modelCallsAfterThis = limits.modelCalls - state.usage.modelCalls - 1;
-    const inspections = limits.toolCalls - state.usage.toolCalls;
     return {
-      modelCallsAfterThis,
-      inspections,
-      toolResponseBytes:
+      modelCallsLeft: limits.modelCalls - state.usage.modelCalls - 1,
+      toolCallsLeft: limits.toolCalls - state.usage.toolCalls,
+      toolResponseBytesLeft:
         limits.totalToolResponseBytes - state.usage.toolResponseBytes,
-      milliseconds: Math.max(
+      millisecondsLeft: Math.max(
         0,
         Math.floor(limits.elapsedMs - context.execution.elapsedMs),
       ),
-      finishOnly: modelCallsAfterThis === 0 || inspections === 0,
     };
   }
 
