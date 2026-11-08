@@ -7,12 +7,12 @@ import path from "node:path";
 import test from "node:test";
 import type { TestContext } from "node:test";
 import { configSchema, defaultLimits } from "../src/investigation/contracts.ts";
-import { InvestigationRunner } from "../src/investigation/InvestigationRunner.ts";
+import { ExplorationRunner } from "../src/investigation/ExplorationRunner.ts";
 import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
-import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
-import { initialInvestigationState } from "../src/investigation/state.ts";
-import type { InvestigationState } from "../src/investigation/state.ts";
-import type { InvestigationContext } from "../src/investigation/context.ts";
+import { ExplorationOperations } from "../src/investigation/ExplorationOperations.ts";
+import { initialExplorationState } from "../src/investigation/state.ts";
+import type { ExplorationState } from "../src/investigation/state.ts";
+import type { ExplorationContext } from "../src/investigation/context.ts";
 import { ExplorationWorkflow } from "../src/workflows/ExplorationWorkflow.ts";
 import { ReportValidator } from "../src/reporting/ReportValidator.ts";
 import { RepositoryInspector } from "../src/infrastructure/repository/RepositoryInspector.ts";
@@ -23,8 +23,8 @@ import type {
   ModelInput,
 } from "../src/investigation/contracts.ts";
 import {
-  createInvestigationWithModel,
-  createInvestigation,
+  createExplorationWithModel,
+  createExploration,
 } from "../src/composition.ts";
 import { digest } from "../src/infrastructure/repository/snapshot.ts";
 import type { Snapshot } from "../src/infrastructure/repository/snapshot.ts";
@@ -104,7 +104,7 @@ test("assembly is inert and execution owns resources and permits only one run", 
   const snapshot = await source(t);
   const schedule = t.mock.method(globalThis, "setTimeout");
   let calls = 0;
-  const investigation = createInvestigationWithModel(
+  const investigation = createExplorationWithModel(
     snapshot,
     {},
     {
@@ -130,8 +130,8 @@ test("assembly is inert and execution owns resources and permits only one run", 
 test("unexpected workflow failure produces an incomplete result and releases execution resources", async (t) => {
   const snapshot = await source(t);
   const dispose = t.mock.method(ExecutionScope.prototype, "dispose");
-  const runner = new InvestigationRunner(
-    initialInvestigationState({
+  const runner = new ExplorationRunner(
+    initialExplorationState({
       runId: "workflow-failure",
       snapshotId: snapshot.snapshotId,
     }),
@@ -159,21 +159,21 @@ test("unexpected workflow failure produces an incomplete result and releases exe
 test("unexpected graph failure preserves committed evidence and the latest validated checkpoint", async (t) => {
   const snapshot = await source(t);
   const saved = candidate(snapshot);
-  const operations = new InvestigationOperations();
+  const operations = new ExplorationOperations();
   const model = scripted([() => read(), () => read([saved], ["tool-1"])]);
   const invokeModel = t.mock.method(model, "requestAction");
   const chooseAction = operations.chooseAction.bind(operations);
   t.mock.method(
     operations,
     "chooseAction",
-    async (state: InvestigationState, context: InvestigationContext) => {
+    async (state: ExplorationState, context: ExplorationContext) => {
       if (state.usage.modelCalls === 2)
         throw new Error("unexpected node failure");
       return chooseAction(state, context);
     },
   );
-  const runner = new InvestigationRunner(
-    initialInvestigationState({
+  const runner = new ExplorationRunner(
+    initialExplorationState({
       runId: "committed-failure",
       snapshotId: snapshot.snapshotId,
     }),
@@ -210,7 +210,7 @@ test("unexpected graph failure preserves committed evidence and the latest valid
 test("production composition connects inspection to the adapter with a fresh conversation per run", async (t) => {
   const snapshot = await source(t);
   const requests: { input: { type?: string; output?: string }[] }[] = [];
-  const modelOptions: Parameters<typeof createInvestigation>[2] = {
+  const modelOptions: Parameters<typeof createExploration>[2] = {
     apiKey: "test-key-not-a-secret",
     fetch: async (input, init) => {
       const request = new Request(input, init);
@@ -241,7 +241,7 @@ test("production composition connects inspection to the adapter with a fresh con
     },
   };
   for (let run = 0; run < 2; run++) {
-    const result = await createInvestigation(snapshot, {}, modelOptions).run();
+    const result = await createExploration(snapshot, {}, modelOptions).run();
     assert.equal(result.completion, "completed");
     assert.equal(result.usage.modelCalls, 2);
     assert.equal(result.usage.toolCalls, 1);
@@ -290,7 +290,7 @@ test("graph follows a prior result and returns source-supported hypotheses with 
       return finish([item]);
     },
   ]);
-  const result = await createInvestigationWithModel(snapshot, {}, model).run();
+  const result = await createExplorationWithModel(snapshot, {}, model).run();
   assert.equal(result.completion, "completed");
   assert.equal(result.termination.reason, "model_finished");
   assert.equal(result.finalCandidates?.length, 1);
@@ -304,7 +304,7 @@ test("graph follows a prior result and returns source-supported hypotheses with 
 
 test("zero candidates is a completed assessment; absence of a response is incomplete", async (t) => {
   const snapshot = await source(t);
-  const complete = await createInvestigationWithModel(
+  const complete = await createExplorationWithModel(
     snapshot,
     {},
     scripted([() => finish()]),
@@ -316,7 +316,7 @@ test("zero candidates is a completed assessment; absence of a response is incomp
       entry.includes("does not establish"),
     ),
   );
-  const incomplete = await createInvestigationWithModel(
+  const incomplete = await createExplorationWithModel(
     snapshot,
     {},
     {
@@ -333,7 +333,7 @@ test("zero candidates is a completed assessment; absence of a response is incomp
 
 test("model/tool limits stop execution and retain only the latest validated checkpoint", async (t) => {
   const snapshot = await source(t);
-  const modelLimited = await createInvestigationWithModel(
+  const modelLimited = await createExplorationWithModel(
     snapshot,
     { limits: { ...defaultLimits, modelCalls: 1 } },
     scripted([() => read()]),
@@ -341,7 +341,7 @@ test("model/tool limits stop execution and retain only the latest validated chec
   assert.equal(modelLimited.termination.limit, "modelCalls");
   assert.equal(modelLimited.usage.modelCalls, 1);
   const saved = candidate(snapshot);
-  const toolLimited = await createInvestigationWithModel(
+  const toolLimited = await createExplorationWithModel(
     snapshot,
     { limits: { ...defaultLimits, toolCalls: 1 } },
     scripted([() => read(), () => read([saved], ["tool-1"])]),
@@ -359,7 +359,7 @@ test("candidate replacements preserve revision history while discarded candidate
     ...initial,
     claim: "The repository implementation still needs inspection.",
   };
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     { limits: { ...defaultLimits, modelCalls: 4 } },
     scripted([
@@ -397,7 +397,7 @@ test("application rejects unread evidence, invented causal IDs, and excessive fi
         ]),
     ],
   ]) {
-    const result = await createInvestigationWithModel(
+    const result = await createExplorationWithModel(
       snapshot,
       { maxCandidates: 1 },
       scripted(steps),
@@ -411,7 +411,7 @@ test("invalid continuation cannot replace an earlier valid provisional checkpoin
   const snapshot = await source(t);
   const saved = candidate(snapshot);
   let calls = 0;
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     {},
     {
@@ -446,7 +446,7 @@ test("invalid continuation cannot replace an earlier valid provisional checkpoin
 
 test("denied tool arguments return observations and do not escape the snapshot", async (t) => {
   const snapshot = await source(t);
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     {},
     scripted([
@@ -464,7 +464,7 @@ test("denied tool arguments return observations and do not escape the snapshot",
 
 test("cumulative response bytes and oversized lines terminate without extra model calls", async (t) => {
   const snapshot = await source(t);
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     { limits: { ...defaultLimits, totalToolResponseBytes: 512 } },
     scripted([() => read(), () => read()]),
@@ -478,7 +478,7 @@ test("cumulative response bytes and oversized lines terminate without extra mode
     ...snapshot,
     files: [{ path: "query.ts", sha256: digest(content) }],
   };
-  const oversized = await createInvestigationWithModel(
+  const oversized = await createExplorationWithModel(
     updated,
     {},
     scripted([() => read()]),
@@ -490,7 +490,7 @@ test("cumulative response bytes and oversized lines terminate without extra mode
 test("deadline aborts a noncooperating model and prevents subsequent actions", async (t) => {
   const snapshot = await source(t);
   let signal: AbortSignal | undefined;
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     { limits: { ...defaultLimits, elapsedMs: 30 } },
     {
@@ -509,7 +509,7 @@ test("deadline aborts a noncooperating model and prevents subsequent actions", a
 test("user cancellation stops in-flight work and pre-cancelled runs dispatch nothing", async (t) => {
   const snapshot = await source(t);
   const controller = new AbortController();
-  const result = await createInvestigationWithModel(
+  const result = await createExplorationWithModel(
     snapshot,
     {},
     {
@@ -520,7 +520,7 @@ test("user cancellation stops in-flight work and pre-cancelled runs dispatch not
     },
   ).run(controller.signal);
   assert.equal(result.termination.reason, "cancelled");
-  const preCancelled = await createInvestigationWithModel(
+  const preCancelled = await createExplorationWithModel(
     snapshot,
     {},
     scripted([]),
@@ -533,7 +533,7 @@ test("invalid configuration fails before dispatch", async (t) => {
   const snapshot = await source(t);
   let calls = 0;
   assert.throws(() =>
-    createInvestigationWithModel(
+    createExplorationWithModel(
       snapshot,
       { limits: { ...defaultLimits, modelCalls: 0 } },
       {

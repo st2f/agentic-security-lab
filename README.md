@@ -29,7 +29,7 @@ Tests use local fixtures, scripted models, and mocked HTTP; they require no API 
 For a live investigation, supply `OPENAI_API_KEY` through the environment or a local `.env`; existing environment values take precedence. Live runs use the configured API account.
 
 ```sh
-npm run investigate -- \
+npm run explore -- \
   --repo . \
   --commit <full-40-character-commit-id> \
   --subtree fixtures/inventory-api \

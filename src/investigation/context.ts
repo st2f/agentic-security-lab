@@ -5,7 +5,7 @@ import type { RepositoryInspector } from "../infrastructure/repository/Repositor
 import type { Snapshot } from "../infrastructure/repository/snapshot.ts";
 
 /** Trusted dependencies and execution capability, separate from evolving state. */
-export type InvestigationContext = {
+export type ExplorationContext = {
   config: RunConfig;
   snapshot: Snapshot;
   model: ActionModel;
@@ -13,4 +13,4 @@ export type InvestigationContext = {
   execution: ExecutionControl;
 };
 
-export type InvestigationDependencies = Omit<InvestigationContext, "execution">;
+export type ExplorationDependencies = Omit<ExplorationContext, "execution">;

@@ -2,25 +2,25 @@ import { END, START, StateGraph } from "@langchain/langgraph";
 import { AsyncLocalStorageProviderSingleton } from "@langchain/core/singletons";
 import { z } from "zod";
 import { configSchema } from "../investigation/contracts.ts";
-import type { InvestigationContext } from "../investigation/context.ts";
-import type { InvestigationOperations } from "../investigation/InvestigationOperations.ts";
+import type { ExplorationContext } from "../investigation/context.ts";
+import type { ExplorationOperations } from "../investigation/ExplorationOperations.ts";
 import {
-  investigationProgressSchema,
-  projectInvestigationProgress,
+  explorationProgressSchema,
+  projectExplorationProgress,
 } from "../investigation/state.ts";
 import type {
-  InvestigationState,
-  InvestigationProgress,
+  ExplorationState,
+  ExplorationProgress,
 } from "../investigation/state.ts";
-import { InvestigationGraphState } from "./investigation-state.ts";
+import { ExplorationGraphState } from "./exploration-state.ts";
 
 // Live services are invocation context, not serializable progress channels.
 const contextSchema = z.object({
   config: configSchema,
-  snapshot: z.custom<InvestigationContext["snapshot"]>(),
-  model: z.custom<InvestigationContext["model"]>(),
-  inspector: z.custom<InvestigationContext["inspector"]>(),
-  execution: z.custom<InvestigationContext["execution"]>(),
+  snapshot: z.custom<ExplorationContext["snapshot"]>(),
+  model: z.custom<ExplorationContext["model"]>(),
+  inspector: z.custom<ExplorationContext["inspector"]>(),
+  execution: z.custom<ExplorationContext["execution"]>(),
 });
 
 // Framework diagnostics receive raw node input, independently of stream filtering.
@@ -32,13 +32,13 @@ const rawDiagnosticsFlags = [
   "LANGCHAIN_VERBOSE",
 ];
 const progressKeys = Object.keys(
-  investigationProgressSchema.shape,
-) as (keyof InvestigationProgress)[];
+  explorationProgressSchema.shape,
+) as (keyof ExplorationProgress)[];
 
 function invocationContext(runtime: {
-  context?: InvestigationContext;
-}): InvestigationContext {
-  if (!runtime.context) throw new Error("Investigation context is required");
+  context?: ExplorationContext;
+}): ExplorationContext {
+  if (!runtime.context) throw new Error("Exploration context is required");
   return runtime.context;
 }
 
@@ -49,11 +49,11 @@ function invocationContext(runtime: {
 export class ExplorationWorkflow {
   private readonly graph;
 
-  constructor(operations: InvestigationOperations) {
+  constructor(operations: ExplorationOperations) {
     const next =
       (node: "choose_action" | "execute_action") =>
-      (state: InvestigationState) => (state.termination ? END : node);
-    this.graph = new StateGraph(InvestigationGraphState, {
+      (state: ExplorationState) => (state.termination ? END : node);
+    this.graph = new StateGraph(ExplorationGraphState, {
       context: contextSchema,
     })
       .addNode("choose_action", (state, runtime) =>
@@ -75,13 +75,13 @@ export class ExplorationWorkflow {
   }
 
   async run(
-    initialState: InvestigationState,
-    context: InvestigationContext,
-    observe: (state: InvestigationProgress) => void,
-  ): Promise<InvestigationProgress> {
+    initialState: ExplorationState,
+    context: ExplorationContext,
+    observe: (state: ExplorationProgress) => void,
+  ): Promise<ExplorationProgress> {
     if (rawDiagnosticsFlags.some((flag) => process.env[flag] === "true")) {
       return {
-        ...projectInvestigationProgress(initialState),
+        ...projectExplorationProgress(initialState),
         termination: initialState.termination ?? {
           reason: "execution_error",
           detail:
@@ -94,7 +94,7 @@ export class ExplorationWorkflow {
     return AsyncLocalStorageProviderSingleton.getInstance().run(
       undefined,
       async () => {
-        let state = projectInvestigationProgress(initialState);
+        let state = projectExplorationProgress(initialState);
         const stream = await this.graph.stream(initialState, {
           context: Object.freeze({ ...context }),
           callbacks: [],
@@ -104,7 +104,7 @@ export class ExplorationWorkflow {
           recursionLimit: context.config.limits.modelCalls * 2 + 2,
         });
         for await (const current of stream) {
-          state = projectInvestigationProgress(current);
+          state = projectExplorationProgress(current);
           // Observers cannot mutate the recovery view retained by this invocation.
           observe(structuredClone(state));
         }

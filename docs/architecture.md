@@ -4,14 +4,14 @@ This document follows one investigation from assembly to saved result. The imple
 
 ## Assembly and responsibilities
 
-Start at [`src/composition.ts`](../src/composition.ts). `createInvestigation` constructs the SDK client and model adapter, then delegates to `createInvestigationWithModel`. That function validates configuration, builds the inspector, operations, graph and initial state, and returns a single-use runner. Tests use the same assembly with a scripted model. Construction starts no timer, cancellation listener, or model request.
+Start at [`src/composition.ts`](../src/composition.ts). `createExploration` constructs the SDK client and model adapter, then delegates to `createExplorationWithModel`. That function validates configuration, builds the inspector, operations, graph and initial state, and returns a single-use runner. Tests use the same assembly with a scripted model. Construction starts no timer, cancellation listener, or model request.
 
 | Component | Responsibility |
 | --- | --- |
 | [CLI](../src/cli.ts) | Prepare the snapshot, assemble and run the investigation, save JSON, then request a report |
-| [InvestigationRunner](../src/investigation/InvestigationRunner.ts) | Start execution resources, retain committed progress for failure recovery, clean up and project the result |
+| [ExplorationRunner](../src/investigation/ExplorationRunner.ts) | Start execution resources, retain committed progress for failure recovery, clean up and project the result |
 | [ExplorationWorkflow](../src/workflows/ExplorationWorkflow.ts) | Compile nodes and conditional routes; supply invocation dependencies through runtime context |
-| [InvestigationOperations](../src/investigation/InvestigationOperations.ts) | Read explicit state/context and return updates: validate actions, enforce limits, inspect source and accept completion |
+| [ExplorationOperations](../src/investigation/ExplorationOperations.ts) | Read explicit state/context and return updates: validate actions, enforce limits, inspect source and accept completion |
 | [OpenAIActionModel](../src/infrastructure/ai/OpenAIActionModel.ts) | Translate the application's message, allowed actions and conversation into provider requests; return action, continuation and usage. The prompt and tool descriptions are application-owned ([prompt](../src/investigation/prompt.ts)) |
 | [RepositoryInspector](../src/infrastructure/repository/RepositoryInspector.ts) | Provide bounded listing, literal search and reading inside the prepared source boundary |
 | [ReportValidator](../src/reporting/ReportValidator.ts), [ReportRenderer](../src/reporting/ReportRenderer.ts) and [saved-report I/O](../src/reporting/saved-report.ts) | Independently validate saved artifacts and evidence, render Markdown and write the report |
@@ -31,13 +31,13 @@ The model is informed of its remaining budget for both model calls and tool call
 
 ## State, dependencies and lifecycle
 
-[InvestigationState](../src/investigation/state.ts) contains identity, the chosen action, provisional/final candidates, termination, limitations, usage, trace and conversation continuation. The [LangGraph schema](../src/workflows/investigation-state.ts) uses replacement channels. Latest observations and tool-ID/path/line visibility derive from accepted trace results; operations retain no mutable progress fields.
+[ExplorationState](../src/investigation/state.ts) contains identity, the chosen action, provisional/final candidates, termination, limitations, usage, trace and conversation continuation. The [LangGraph schema](../src/workflows/exploration-state.ts) uses replacement channels. Latest observations and tool-ID/path/line visibility derive from accepted trace results; operations retain no mutable progress fields.
 
 [Runtime context](../src/investigation/context.ts) carries fixed references to validated configuration, snapshot, model, inspector and execution capability. SDK clients and credentials stay outside graph state. The adapter holds only its client: each request receives conversation history and provider-call correlation, then returns detached JSON continuation. Independent invocations can reuse stateless operations and a compiled graph with separate state and context.
 
-`InvestigationRunner.run(signal?)` starts an [ExecutionScope](../src/investigation/ExecutionScope.ts) with a monotonic clock, deadline and cancellation signal. Bounded waiting returns on interruption even when external work ignores cancellation. Late replies cannot introduce accepted actions or evidence. Cleanup in `finally` seals the observer, clears timers/listeners, aborts remaining waits, blocks later dispatch and freezes elapsed time.
+`ExplorationRunner.run(signal?)` starts an [ExecutionScope](../src/investigation/ExecutionScope.ts) with a monotonic clock, deadline and cancellation signal. Bounded waiting returns on interruption even when external work ignores cancellation. Late replies cannot introduce accepted actions or evidence. Cleanup in `finally` seals the observer, clears timers/listeners, aborts remaining waits, blocks later dispatch and freezes elapsed time.
 
-The runner retains an `InvestigationProgress` view of committed state for unexpected failures. This view excludes conversation, the chosen action and live dependencies. It is used to project an incomplete result, not to resume execution. An accepted termination is preserved; a model call without reported usage makes token totals partial. Recovery is in process, with no durable checkpointing, automatic retry or exactly-once provider guarantee.
+The runner retains an `ExplorationProgress` view of committed state for unexpected failures. This view excludes conversation, the chosen action and live dependencies. It is used to project an incomplete result, not to resume execution. An accepted termination is preserved; a model call without reported usage makes token totals partial. Recovery is in process, with no durable checkpointing, automatic retry or exactly-once provider guarantee.
 
 ## Inspection, evidence and budgets
 

@@ -9,14 +9,14 @@ import type { ActionModel } from "../src/investigation/ActionModel.ts";
 import { configSchema, defaultLimits } from "../src/investigation/contracts.ts";
 import type { Action } from "../src/investigation/contracts.ts";
 import type {
-  InvestigationContext,
-  InvestigationDependencies,
+  ExplorationContext,
+  ExplorationDependencies,
 } from "../src/investigation/context.ts";
-import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
-import { InvestigationRunner } from "../src/investigation/InvestigationRunner.ts";
+import { ExplorationOperations } from "../src/investigation/ExplorationOperations.ts";
+import { ExplorationRunner } from "../src/investigation/ExplorationRunner.ts";
 import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
-import { initialInvestigationState } from "../src/investigation/state.ts";
-import type { InvestigationState } from "../src/investigation/state.ts";
+import { initialExplorationState } from "../src/investigation/state.ts";
+import type { ExplorationState } from "../src/investigation/state.ts";
 import { RepositoryInspector } from "../src/infrastructure/repository/RepositoryInspector.ts";
 import { digest } from "../src/infrastructure/repository/snapshot.ts";
 import { ReportValidator } from "../src/reporting/ReportValidator.ts";
@@ -42,7 +42,7 @@ const finish: Action = {
 async function fixture(
   t: TestContext,
   name = "run",
-): Promise<InvestigationDependencies> {
+): Promise<ExplorationDependencies> {
   const root = await mkdtemp(path.join(os.tmpdir(), "exploration-workflow-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const content = `export const label = ${JSON.stringify(name)};\n`;
@@ -74,10 +74,10 @@ async function fixture(
 
 function runner(
   workflow: ExplorationWorkflow,
-  dependencies: InvestigationDependencies,
+  dependencies: ExplorationDependencies,
 ) {
-  return new InvestigationRunner(
-    initialInvestigationState({
+  return new ExplorationRunner(
+    initialExplorationState({
       runId: dependencies.config.question ?? "run",
       snapshotId: dependencies.snapshot.snapshotId,
     }),
@@ -87,8 +87,8 @@ function runner(
 }
 
 async function validate(
-  result: Awaited<ReturnType<InvestigationRunner["run"]>>,
-  dependencies: InvestigationDependencies,
+  result: Awaited<ReturnType<ExplorationRunner["run"]>>,
+  dependencies: ExplorationDependencies,
 ) {
   const { root, ...manifest } = dependencies.snapshot;
   await new ReportValidator().validate(
@@ -102,7 +102,7 @@ test("cancellation observed by a node before dispatch counts and records no call
   for (const kind of ["model", "tool"] as const) {
     const dependencies = await fixture(t, kind);
     const controller = new AbortController();
-    const operations = new InvestigationOperations();
+    const operations = new ExplorationOperations();
     let modelCalls = 0;
     let toolCalls = 0;
     const model = dependencies.model;
@@ -124,7 +124,7 @@ test("cancellation observed by a node before dispatch counts and records no call
     t.mock.method(
       operations,
       method,
-      async (state: InvestigationState, context: InvestigationContext) => {
+      async (state: ExplorationState, context: ExplorationContext) => {
         controller.abort();
         return original(state, context);
       },
@@ -146,7 +146,7 @@ test("cancellation observed by a node before dispatch counts and records no call
 
 test("a failed inspection node keeps committed progress without inventing a tool event", async (t) => {
   const dependencies = await fixture(t);
-  const operations = new InvestigationOperations();
+  const operations = new ExplorationOperations();
   const execute = t.mock.method(operations, "executeAction", async () => {
     throw new Error("node failed before inspection");
   });
@@ -194,13 +194,13 @@ test("one compiled workflow isolates concurrent invocation state and receives st
   };
   first.model = model;
   second.model = model;
-  const operations = new InvestigationOperations();
+  const operations = new ExplorationOperations();
   const choose = operations.chooseAction.bind(operations);
-  const contexts = new Map<string, InvestigationContext>();
+  const contexts = new Map<string, ExplorationContext>();
   t.mock.method(
     operations,
     "chooseAction",
-    (state: InvestigationState, context: InvestigationContext) => {
+    (state: ExplorationState, context: ExplorationContext) => {
       const own = dependencies.find(
         (item) => item.config.question === state.runId,
       )!;
@@ -241,7 +241,7 @@ test("two-node rounds exhaust the application budget before the graph recursion 
     limits: { ...defaultLimits, modelCalls: 3 },
   });
   const result = await runner(
-    new ExplorationWorkflow(new InvestigationOperations()),
+    new ExplorationWorkflow(new ExplorationOperations()),
     dependencies,
   ).run();
   assert.deepEqual(result.termination, {
@@ -286,9 +286,9 @@ test("committed progress streams omit continuation and dependencies and cannot m
   const snapshots: unknown[] = [];
   try {
     const result = await new ExplorationWorkflow(
-      new InvestigationOperations(),
+      new ExplorationOperations(),
     ).run(
-      initialInvestigationState({
+      initialExplorationState({
         runId: "privacy",
         snapshotId: dependencies.snapshot.snapshotId,
       }),
@@ -371,7 +371,7 @@ test("ambient framework callbacks and tracing do not inherit investigation state
     const parent = provider.getInstance().getStore();
     parent.tracingEnabled = true;
     const result = await runner(
-      new ExplorationWorkflow(new InvestigationOperations()),
+      new ExplorationWorkflow(new ExplorationOperations()),
       dependencies,
     ).run();
     assert.equal(result.completion, "completed");
@@ -417,7 +417,7 @@ test("environment-enabled raw framework diagnostics stop before graph or externa
     for (const other of flags)
       process.env[other] = other === flag ? "true" : "false";
     const result = await runner(
-      new ExplorationWorkflow(new InvestigationOperations()),
+      new ExplorationWorkflow(new ExplorationOperations()),
       dependencies,
     ).run();
     assert.equal(result.completion, "incomplete", flag);

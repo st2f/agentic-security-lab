@@ -16,13 +16,13 @@ import type {
   ModelReply,
   RunResult,
 } from "../src/investigation/contracts.ts";
-import type { InvestigationDependencies } from "../src/investigation/context.ts";
+import type { ExplorationDependencies } from "../src/investigation/context.ts";
 import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
-import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
-import { InvestigationRunner } from "../src/investigation/InvestigationRunner.ts";
-import type { InvestigationWorkflow } from "../src/investigation/InvestigationRunner.ts";
-import { initialInvestigationState } from "../src/investigation/state.ts";
-import type { InvestigationState } from "../src/investigation/state.ts";
+import { ExplorationOperations } from "../src/investigation/ExplorationOperations.ts";
+import { ExplorationRunner } from "../src/investigation/ExplorationRunner.ts";
+import type { ExplorationLoop } from "../src/investigation/ExplorationRunner.ts";
+import { initialExplorationState } from "../src/investigation/state.ts";
+import type { ExplorationState } from "../src/investigation/state.ts";
 import {
   OutputBudgetError,
   RepositoryInspector,
@@ -58,7 +58,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function fixture(t: TestContext): Promise<InvestigationDependencies> {
+async function fixture(t: TestContext): Promise<ExplorationDependencies> {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "investigation-lifecycle-"),
   );
@@ -91,7 +91,7 @@ async function fixture(t: TestContext): Promise<InvestigationDependencies> {
 }
 
 /** Progress after one accepted model call whose inspection has not run. */
-function afterModelCall(state: InvestigationState): InvestigationState {
+function afterModelCall(state: ExplorationState): ExplorationState {
   return {
     ...state,
     usage: { ...state.usage, modelCalls: 1, inputTokens: 10, outputTokens: 5 },
@@ -109,13 +109,13 @@ function afterModelCall(state: InvestigationState): InvestigationState {
 }
 
 function runner(
-  dependencies: InvestigationDependencies,
-  workflow: InvestigationWorkflow = new ExplorationWorkflow(
-    new InvestigationOperations(),
+  dependencies: ExplorationDependencies,
+  workflow: ExplorationLoop = new ExplorationWorkflow(
+    new ExplorationOperations(),
   ),
 ) {
-  return new InvestigationRunner(
-    initialInvestigationState({
+  return new ExplorationRunner(
+    initialExplorationState({
       runId: "lifecycle-run",
       snapshotId: dependencies.snapshot.snapshotId,
     }),
@@ -126,7 +126,7 @@ function runner(
 
 async function validate(
   result: RunResult,
-  dependencies: InvestigationDependencies,
+  dependencies: ExplorationDependencies,
 ) {
   const { root, ...manifest } = dependencies.snapshot;
   await new ReportValidator().validate(
@@ -202,7 +202,7 @@ test("every termination path clears its timer and both cancellation listener set
           throw new OutputBudgetError();
         },
       };
-    const operations = new InvestigationOperations();
+    const operations = new ExplorationOperations();
     if (mode === "unexpected")
       t.mock.method(operations, "chooseAction", async () => {
         throw new Error("unexpected node failure");
@@ -246,12 +246,12 @@ test("every termination path clears its timer and both cancellation listener set
 test("runner seals committed state before cleanup callbacks and ignores later observer notifications", async (t) => {
   const dependencies = await fixture(t);
   for (const completed of [true, false]) {
-    let notify!: (state: InvestigationState) => void;
-    let poisoned!: InvestigationState;
-    const workflow: InvestigationWorkflow = {
+    let notify!: (state: ExplorationState) => void;
+    let poisoned!: ExplorationState;
+    const workflow: ExplorationLoop = {
       async run(state, context, observe) {
         notify = observe;
-        const committed: InvestigationState = completed
+        const committed: ExplorationState = completed
           ? {
               ...state,
               finalCandidates: [],
@@ -317,7 +317,7 @@ test("unexpected failure preserves a committed reason or recognizes cancellation
   ] as const) {
     now = 0;
     const controller = new AbortController();
-    const workflow: InvestigationWorkflow = {
+    const workflow: ExplorationLoop = {
       async run(state, context, observe) {
         const committed = afterModelCall(state);
         if (cause === "already_stopped")

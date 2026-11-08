@@ -13,22 +13,22 @@ import type {
   ModelReply,
 } from "../src/investigation/contracts.ts";
 import { defaultTask } from "../src/investigation/prompt.ts";
-import type { InvestigationContext } from "../src/investigation/context.ts";
+import type { ExplorationContext } from "../src/investigation/context.ts";
 import { ExecutionScope } from "../src/investigation/ExecutionScope.ts";
-import { InvestigationOperations } from "../src/investigation/InvestigationOperations.ts";
+import { ExplorationOperations } from "../src/investigation/ExplorationOperations.ts";
 import {
-  initialInvestigationState,
+  initialExplorationState,
   latestObservation,
   returnedEvidence,
 } from "../src/investigation/state.ts";
-import type { InvestigationState } from "../src/investigation/state.ts";
+import type { ExplorationState } from "../src/investigation/state.ts";
 import {
   RepositoryInspector,
   serializedBytes,
 } from "../src/infrastructure/repository/RepositoryInspector.ts";
 import { digest } from "../src/infrastructure/repository/snapshot.ts";
 
-const operations = new InvestigationOperations();
+const operations = new ExplorationOperations();
 const read: Action = {
   name: "read_lines",
   path: "query.ts",
@@ -70,7 +70,7 @@ async function fixture(t: TestContext) {
     skipped: [],
   };
   const signal = new AbortController().signal;
-  const context: InvestigationContext = {
+  const context: ExplorationContext = {
     snapshot,
     config: configSchema.parse({}),
     inspector: new RepositoryInspector(snapshot),
@@ -86,7 +86,7 @@ async function fixture(t: TestContext) {
       bounded: (operation) => operation(signal),
     },
   };
-  const state = initialInvestigationState({
+  const state = initialExplorationState({
     runId: "operations-run",
     snapshotId: snapshot.snapshotId,
   });
@@ -112,8 +112,8 @@ async function fixture(t: TestContext) {
 }
 
 async function step(
-  state: InvestigationState,
-  context: InvestigationContext,
+  state: ExplorationState,
+  context: ExplorationContext,
   operation: "chooseAction" | "executeAction",
 ) {
   const before = structuredClone(state);

@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import OpenAI from "openai";
 import { z } from "zod";
 import { configSchema, defaultLimits } from "./investigation/contracts.ts";
-import { createInvestigation } from "./composition.ts";
+import { createExploration } from "./composition.ts";
 import { prepareSnapshot } from "./infrastructure/repository/snapshot.ts";
 import { writeSavedReport } from "./reporting/saved-report.ts";
 import { ReportValidationError } from "./reporting/ReportValidator.ts";
@@ -63,12 +63,12 @@ async function main() {
     outputParent: path.resolve(values.output!),
   });
   const controller = new AbortController();
-  const investigation = createInvestigation(snapshot, config, { apiKey });
+  const exploration = createExploration(snapshot, config, { apiKey });
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
   let result;
   try {
-    result = await investigation.run(controller.signal);
+    result = await exploration.run(controller.signal);
   } finally {
     process.removeListener("SIGINT", cancel);
   }
@@ -114,6 +114,6 @@ function describe(error: unknown): string {
 }
 
 main().catch((error: unknown) => {
-  console.error(`Investigation failed: ${describe(error)}`);
+  console.error(`Exploration failed: ${describe(error)}`);
   process.exitCode = 1;
 });

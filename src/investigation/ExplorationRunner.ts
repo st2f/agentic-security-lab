@@ -1,32 +1,29 @@
 import type { RunResult } from "./contracts.ts";
-import type {
-  InvestigationContext,
-  InvestigationDependencies,
-} from "./context.ts";
+import type { ExplorationContext, ExplorationDependencies } from "./context.ts";
 import { ExecutionScope } from "./ExecutionScope.ts";
-import { projectRunResult, projectInvestigationProgress } from "./state.ts";
-import type { InvestigationState, InvestigationProgress } from "./state.ts";
+import { projectRunResult, projectExplorationProgress } from "./state.ts";
+import type { ExplorationState, ExplorationProgress } from "./state.ts";
 
 /** Execution boundary; the runner does not depend on LangGraph APIs. */
-export interface InvestigationWorkflow {
+export interface ExplorationLoop {
   run(
-    state: InvestigationState,
-    context: InvestigationContext,
-    observe: (state: InvestigationProgress) => void,
-  ): Promise<InvestigationProgress>;
+    state: ExplorationState,
+    context: ExplorationContext,
+    observe: (state: ExplorationProgress) => void,
+  ): Promise<ExplorationProgress>;
 }
 
 /** Execute one investigation and project the last committed graph state. */
-export class InvestigationRunner {
-  private readonly initialState: InvestigationState;
-  private readonly workflow: InvestigationWorkflow;
-  private readonly dependencies: InvestigationDependencies;
+export class ExplorationRunner {
+  private readonly initialState: ExplorationState;
+  private readonly workflow: ExplorationLoop;
+  private readonly dependencies: ExplorationDependencies;
   private started = false;
 
   constructor(
-    initialState: InvestigationState,
-    workflow: InvestigationWorkflow,
-    dependencies: InvestigationDependencies,
+    initialState: ExplorationState,
+    workflow: ExplorationLoop,
+    dependencies: ExplorationDependencies,
   ) {
     this.initialState = structuredClone(initialState);
     this.workflow = workflow;
@@ -39,7 +36,7 @@ export class InvestigationRunner {
     const execution = new ExecutionScope(
       this.dependencies.config.limits.elapsedMs,
     );
-    let state = projectInvestigationProgress(this.initialState);
+    let state = projectExplorationProgress(this.initialState);
     let acceptingUpdates = true;
     try {
       execution.start(signal);

@@ -11,7 +11,7 @@ import type {
   ModelBudget,
   Termination,
 } from "./contracts.ts";
-import type { InvestigationContext } from "./context.ts";
+import type { ExplorationContext } from "./context.ts";
 import {
   candidateReferences,
   hasEvidenceLines,
@@ -22,7 +22,7 @@ import {
   latestObservation,
   returnedEvidence,
 } from "./state.ts";
-import type { InvestigationState, InvestigationTraceEvent } from "./state.ts";
+import type { ExplorationState, ExplorationTraceEvent } from "./state.ts";
 import { defaultTask } from "./prompt.ts";
 import {
   OutputBudgetError,
@@ -31,7 +31,7 @@ import {
 
 class InvalidOutput extends Error {}
 
-type Update = Partial<InvestigationState>;
+type Update = Partial<ExplorationState>;
 type Inspection = Exclude<Action, { name: "finish" }>;
 
 const allActions: ActionName[] = [
@@ -41,12 +41,12 @@ const allActions: ActionName[] = [
   "finish",
 ];
 
-/** Investigation policy over explicit state; retains no run progress. */
-export class InvestigationOperations {
+/** Exploration policy over explicit state; retains no run progress. */
+export class ExplorationOperations {
   /** `choose_action`: enforce call limits, ask the model, validate its choice. */
   async chooseAction(
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): Promise<Update> {
     const stopped = this.interruption(state, context);
     if (stopped) return { action: null, termination: stopped };
@@ -159,8 +159,8 @@ export class InvestigationOperations {
 
   /** `execute_action`: run the chosen inspection or accept the final assessment. */
   async executeAction(
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): Promise<Update> {
     const action = state.action;
     if (!action) throw new Error("No chosen action");
@@ -173,8 +173,8 @@ export class InvestigationOperations {
 
   private finish(
     action: Extract<Action, { name: "finish" }>,
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): Update {
     try {
       if (action.candidates.length > context.config.maxCandidates)
@@ -202,8 +202,8 @@ export class InvestigationOperations {
 
   private async inspect(
     action: Inspection,
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): Promise<Update> {
     const { limits } = context.config;
     if (state.usage.toolCalls >= limits.toolCalls)
@@ -214,7 +214,7 @@ export class InvestigationOperations {
     const usage = { ...state.usage, toolCalls: state.usage.toolCalls + 1 };
     const toolCallId = `tool-${usage.toolCalls}`;
     const { name, args } = inspectionArguments(action);
-    const entry: InvestigationTraceEvent = {
+    const entry: ExplorationTraceEvent = {
       ...this.event(state, "tool"),
       toolCallId,
       arguments: { name, ...args },
@@ -268,8 +268,8 @@ export class InvestigationOperations {
 
   /** Remaining allowances; `modelCallsLeft` excludes the call about to be made. */
   private budget(
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): ModelBudget {
     const { limits } = context.config;
     return {
@@ -285,26 +285,26 @@ export class InvestigationOperations {
   }
 
   private close(
-    state: InvestigationState,
-    entry: InvestigationTraceEvent,
+    state: ExplorationState,
+    entry: ExplorationTraceEvent,
     begin: number,
-    context: InvestigationContext,
-  ): InvestigationTraceEvent[] {
+    context: ExplorationContext,
+  ): ExplorationTraceEvent[] {
     entry.durationMs = context.execution.elapsedMs - begin;
     return [...state.trace, entry];
   }
 
   private interruption(
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): Termination | null {
     return state.termination ?? context.execution.interruption();
   }
 
   private event(
-    state: InvestigationState,
-    type: InvestigationTraceEvent["type"],
-  ): InvestigationTraceEvent {
+    state: ExplorationState,
+    type: ExplorationTraceEvent["type"],
+  ): ExplorationTraceEvent {
     return {
       id: `event-${state.trace.length + 1}`,
       type,
@@ -316,8 +316,8 @@ export class InvestigationOperations {
 
   private validateCandidates(
     candidates: Candidate[],
-    state: InvestigationState,
-    context: InvestigationContext,
+    state: ExplorationState,
+    context: ExplorationContext,
   ): void {
     if (new Set(candidates.map((item) => item.id)).size !== candidates.length)
       throw new InvalidOutput();

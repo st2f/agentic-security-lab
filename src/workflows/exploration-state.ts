@@ -4,17 +4,17 @@ import {
   actionSchema,
   conversationContinuationSchema,
 } from "../investigation/contracts.ts";
-import { investigationProgressSchema } from "../investigation/state.ts";
-import type { InvestigationState } from "../investigation/state.ts";
+import { explorationProgressSchema } from "../investigation/state.ts";
+import type { ExplorationState } from "../investigation/state.ts";
 
 /** Explicit validation schema; graph channels alone do not replace policy checks. */
-export const investigationStateSchema = z.strictObject({
-  ...investigationProgressSchema.shape,
+export const explorationStateSchema = z.strictObject({
+  ...explorationProgressSchema.shape,
   action: actionSchema.nullable(),
   conversation: conversationContinuationSchema,
-}) satisfies z.ZodType<InvestigationState>;
+}) satisfies z.ZodType<ExplorationState>;
 
 /** Every field uses replacement semantics; no append or summing reducers. */
-export const InvestigationGraphState = new StateSchema(
-  investigationStateSchema.shape,
+export const ExplorationGraphState = new StateSchema(
+  explorationStateSchema.shape,
 );

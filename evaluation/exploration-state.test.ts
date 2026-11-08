@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { TestContext } from "node:test";
 import { END, START, StateGraph } from "@langchain/langgraph";
-import { createInvestigationWithModel } from "../src/composition.ts";
+import { createExplorationWithModel } from "../src/composition.ts";
 import { configSchema } from "../src/investigation/contracts.ts";
 import type {
   Action,
@@ -14,20 +14,20 @@ import type {
 } from "../src/investigation/contracts.ts";
 import {
   candidateCheckpointUpdate,
-  initialInvestigationState,
+  initialExplorationState,
   latestObservation,
   projectRunResult,
   returnedEvidence,
 } from "../src/investigation/state.ts";
-import type { InvestigationTraceEvent } from "../src/investigation/state.ts";
-import type { InvestigationState } from "../src/investigation/state.ts";
+import type { ExplorationTraceEvent } from "../src/investigation/state.ts";
+import type { ExplorationState } from "../src/investigation/state.ts";
 import { hasEvidenceLines } from "../src/investigation/evidence.ts";
 import { digest } from "../src/infrastructure/repository/snapshot.ts";
 import { ReportValidator } from "../src/reporting/ReportValidator.ts";
 import {
-  InvestigationGraphState,
-  investigationStateSchema,
-} from "../src/workflows/investigation-state.ts";
+  ExplorationGraphState,
+  explorationStateSchema,
+} from "../src/workflows/exploration-state.ts";
 
 const identity = { runId: "test-run", snapshotId: "a".repeat(64) };
 const metadata = {
@@ -57,7 +57,7 @@ const candidate: Candidate = {
   priorityReason: "Possible cross-tenant disclosure.",
   nextChecks: ["Inspect the callee."],
 };
-const modelEvent: InvestigationTraceEvent = {
+const modelEvent: ExplorationTraceEvent = {
   id: "event-1",
   type: "model",
   startedAt: "2026-11-05T10:00:00.000Z",
@@ -66,10 +66,10 @@ const modelEvent: InvestigationTraceEvent = {
 };
 
 test("initial state is independently owned and JSON serializable; schema rejects execution resources", () => {
-  const first = initialInvestigationState(identity);
-  const second = initialInvestigationState(identity);
+  const first = initialExplorationState(identity);
+  const second = initialExplorationState(identity);
   assert.deepEqual(
-    investigationStateSchema.parse(first),
+    explorationStateSchema.parse(first),
     JSON.parse(JSON.stringify(first)),
   );
   first.provisionalCandidates.push(structuredClone(candidate));
@@ -93,15 +93,15 @@ test("initial state is independently owned and JSON serializable; schema rejects
     },
     { ...second, usage: { ...second.usage, inputTokens: Infinity } },
   ])
-    assert.equal(investigationStateSchema.safeParse(invalid).success, false);
+    assert.equal(explorationStateSchema.safeParse(invalid).success, false);
 });
 
 test("graph channels preserve null checkpoints, clear with empty replacements, and replace trace and totals", async () => {
-  const state = initialInvestigationState(identity);
+  const state = initialExplorationState(identity);
   state.provisionalCandidates = [structuredClone(candidate)];
   state.trace = [structuredClone(modelEvent)];
   state.usage.modelCalls = 1;
-  const graph = new StateGraph(InvestigationGraphState)
+  const graph = new StateGraph(ExplorationGraphState)
     .addNode("keep", () => candidateCheckpointUpdate(null))
     .addNode("clear", (current) => {
       assert.deepEqual(current.provisionalCandidates, [candidate]);
@@ -129,12 +129,12 @@ test("graph channels preserve null checkpoints, clear with empty replacements, a
 });
 
 test("observations and exact evidence visibility derive from accepted trace results", () => {
-  const state = initialInvestigationState(identity);
+  const state = initialExplorationState(identity);
   function tool(
     id: number,
     result?: InspectionResult,
-    outcome: InvestigationTraceEvent["outcome"] = "ok",
-  ): InvestigationTraceEvent {
+    outcome: ExplorationTraceEvent["outcome"] = "ok",
+  ): ExplorationTraceEvent {
     return {
       ...modelEvent,
       id: `event-${id}`,
@@ -223,7 +223,7 @@ test("observations and exact evidence visibility derive from accepted trace resu
     code: "invalid_request",
     message: "Denied path",
   });
-  assert.equal(latestObservation(initialInvestigationState(identity)), null);
+  assert.equal(latestObservation(initialExplorationState(identity)), null);
 });
 
 async function fixture(t: TestContext) {
@@ -276,7 +276,7 @@ test("result projection exactly preserves current completed, empty, and incomple
     [f.read, { ...f.read, checkpoint: [f.item] }],
   ]) {
     let index = 0;
-    const original = await createInvestigationWithModel(
+    const original = await createExplorationWithModel(
       f.snapshot,
       {},
       {
@@ -292,8 +292,8 @@ test("result projection exactly preserves current completed, empty, and incomple
       },
     ).run();
     const { elapsedMs, ...usage } = original.usage;
-    const state = investigationStateSchema.parse({
-      ...initialInvestigationState(original),
+    const state = explorationStateSchema.parse({
+      ...initialExplorationState(original),
       provisionalCandidates: original.provisionalCandidates,
       finalCandidates: original.finalCandidates,
       termination: original.termination,
@@ -322,7 +322,7 @@ test("result projection exactly preserves current completed, empty, and incomple
 });
 
 test("projection of an interrupted state keeps progress and omits working fields", () => {
-  const state = initialInvestigationState(identity);
+  const state = initialExplorationState(identity);
   state.provisionalCandidates = [structuredClone(candidate)];
   state.trace = [structuredClone(modelEvent)];
   state.usage.modelCalls = 1;
@@ -339,7 +339,7 @@ test("projection of an interrupted state keeps progress and omits working fields
 });
 
 test("projection rejects contradictory completion and invalid elapsed time", () => {
-  const state = initialInvestigationState(identity);
+  const state = initialExplorationState(identity);
   assert.throws(
     () =>
       projectRunResult(
@@ -368,7 +368,7 @@ test("projection rejects contradictory completion and invalid elapsed time", () 
 test("public projection selects metadata fields and rejects unexpected nested diagnostic data", async (t) => {
   const f = await fixture(t);
   const actions = [f.read, f.finish([f.item])];
-  const original = await createInvestigationWithModel(
+  const original = await createExplorationWithModel(
     f.snapshot,
     {},
     {
@@ -378,11 +378,11 @@ test("public projection selects metadata fields and rejects unexpected nested di
     },
   ).run();
   const { elapsedMs, ...usage } = original.usage;
-  const state: InvestigationState = {
-    ...initialInvestigationState(original),
+  const state: ExplorationState = {
+    ...initialExplorationState(original),
     finalCandidates: original.finalCandidates,
     termination: original.termination,
-    trace: original.trace as InvestigationTraceEvent[],
+    trace: original.trace as ExplorationTraceEvent[],
     usage,
   };
   const secret = "private-diagnostic-sentinel";
@@ -397,7 +397,7 @@ test("public projection selects metadata fields and rejects unexpected nested di
   };
   const projected = projectRunResult(input, metadata, elapsedMs);
   assert.equal(JSON.stringify(projected).includes(secret), false);
-  const mutations: ((value: InvestigationState) => void)[] = [
+  const mutations: ((value: ExplorationState) => void)[] = [
     (value) => {
       Object.assign(value.usage, { apiKey: secret });
     },

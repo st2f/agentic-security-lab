@@ -19,12 +19,12 @@ import type {
   RunResult,
 } from "../src/investigation/contracts.ts";
 import { defaultLimits } from "../src/investigation/contracts.ts";
-import { createInvestigationWithModel } from "../src/composition.ts";
+import { createExplorationWithModel } from "../src/composition.ts";
 import {
-  initialInvestigationState,
+  initialExplorationState,
   projectRunResult,
 } from "../src/investigation/state.ts";
-import type { InvestigationTraceEvent } from "../src/investigation/state.ts";
+import type { ExplorationTraceEvent } from "../src/investigation/state.ts";
 import {
   digest,
   snapshotPolicy,
@@ -150,12 +150,12 @@ test("retained completed and incomplete experiments preserve their JSON contract
     const { elapsedMs, ...usage } = run.usage;
     const projected = projectRunResult(
       {
-        ...initialInvestigationState(run),
+        ...initialExplorationState(run),
         finalCandidates: run.finalCandidates,
         provisionalCandidates: run.provisionalCandidates,
         termination: run.termination,
         scopeAndLimitations: run.scopeAndLimitations,
-        trace: run.trace as InvestigationTraceEvent[],
+        trace: run.trace as ExplorationTraceEvent[],
         usage,
       },
       run,
@@ -180,7 +180,7 @@ test("retained completed and incomplete experiments preserve their JSON contract
 
 test("saved report links exact snapshot ranges, includes protective evidence and tools, and is repeatable", async (t) => {
   const f = await fixture(t);
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([f.read, f.finish]),
@@ -212,7 +212,7 @@ test("saved report links exact snapshot ranges, includes protective evidence and
 test("zero candidates and no tool calls do not become a security assurance", async (t) => {
   const f = await fixture(t);
   const finish = { ...f.finish, candidates: [], basedOnToolCallIds: [] };
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([finish]),
@@ -231,7 +231,7 @@ test("zero candidates and no tool calls do not become a security assurance", asy
 test("incomplete runs retain provisional candidates and partial usage without presenting final findings", async (t) => {
   const f = await fixture(t);
   let calls = 0;
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     {
@@ -269,7 +269,7 @@ test("incomplete runs retain provisional candidates and partial usage without pr
 test("incomplete changed snapshots label provisional evidence as historical and suppress current-source excerpts", async (t) => {
   const f = await fixture(t);
   let calls = 0;
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     {
@@ -304,7 +304,7 @@ test("incomplete changed snapshots label provisional evidence as historical and 
 
 test("completed report generation refuses mutated snapshots without overwriting an earlier report", async (t) => {
   const f = await fixture(t);
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([f.read, f.finish]),
@@ -319,7 +319,7 @@ test("completed report generation refuses mutated snapshots without overwriting 
 
 test("saved evidence must match actual returned lines, snapshot provenance, and trace accounting", async (t) => {
   const f = await fixture(t);
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([f.read, f.finish]),
@@ -382,7 +382,7 @@ test("model prose and source filenames cannot introduce active links or HTML int
   );
   f.candidate.claim =
     "[click](javascript:alert(1)) <img src=x onerror=alert(1)>";
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([f.read, f.finish]),
@@ -399,7 +399,7 @@ test("model prose and source filenames cannot introduce active links or HTML int
 
 test("budget exhaustion before a checkpoint remains an incomplete report", async (t) => {
   const f = await fixture(t);
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     { limits: { ...defaultLimits, modelCalls: 1 } },
     replies([f.read]),
@@ -415,7 +415,7 @@ test("budget exhaustion before a checkpoint remains an incomplete report", async
 
 test("report output cannot follow a symlink to overwrite an unrelated file", async (t) => {
   const f = await fixture(t);
-  const run = await createInvestigationWithModel(
+  const run = await createExplorationWithModel(
     f.snapshot,
     {},
     replies([f.read, f.finish]),

@@ -18,16 +18,13 @@ import type {
   TraceEvent,
 } from "./contracts.ts";
 
-export type InvestigationTraceEvent = Omit<
-  TraceEvent,
-  "arguments" | "result"
-> & {
+export type ExplorationTraceEvent = Omit<TraceEvent, "arguments" | "result"> & {
   arguments?: JsonObject;
   result?: InspectionResult;
 };
 
 /** Invocation-local investigation progress; execution resources live in context. */
-export type InvestigationState = {
+export type ExplorationState = {
   runId: string;
   snapshotId: string;
   /** Chosen by `choose_action`, consumed by `execute_action`. */
@@ -37,13 +34,13 @@ export type InvestigationState = {
   termination: Termination | null;
   scopeAndLimitations: string[];
   usage: Omit<RunResult["usage"], "elapsedMs">;
-  trace: InvestigationTraceEvent[];
+  trace: ExplorationTraceEvent[];
   conversation: ConversationContinuation;
 };
 
 /** Committed recovery/output view; never used to resume graph execution. */
-export type InvestigationProgress = Pick<
-  InvestigationState,
+export type ExplorationProgress = Pick<
+  ExplorationState,
   | "runId"
   | "snapshotId"
   | "provisionalCandidates"
@@ -72,7 +69,7 @@ const inspectionArgumentsSchema: z.ZodType<JsonObject> = z.discriminatedUnion(
   ],
 );
 /** Explicit validation schema; graph channels alone do not replace policy checks. */
-export const investigationProgressSchema = z.strictObject({
+export const explorationProgressSchema = z.strictObject({
   runId: text,
   snapshotId: hash,
   provisionalCandidates: z.array(candidateSchema).max(20),
@@ -116,12 +113,12 @@ export const investigationProgressSchema = z.strictObject({
       }),
     )
     .max(2200),
-}) satisfies z.ZodType<InvestigationProgress>;
+}) satisfies z.ZodType<ExplorationProgress>;
 
 /** Allowlisted, detached view for recovery observers and output. */
-export function projectInvestigationProgress(
-  state: InvestigationProgress,
-): InvestigationProgress {
+export function projectExplorationProgress(
+  state: ExplorationProgress,
+): ExplorationProgress {
   // Validation must not reorder recorded arguments when reports serialize them.
   return structuredClone({
     runId: state.runId,
@@ -135,10 +132,10 @@ export function projectInvestigationProgress(
   });
 }
 
-export function initialInvestigationState(identity: {
+export function initialExplorationState(identity: {
   runId: string;
   snapshotId: string;
-}): InvestigationState {
+}): ExplorationState {
   return {
     runId: identity.runId,
     snapshotId: identity.snapshotId,
@@ -166,16 +163,13 @@ export function initialInvestigationState(identity: {
 /** Call only after policy has validated a model's provisional replacement. */
 export function candidateCheckpointUpdate(
   checkpoint: Candidate[] | null,
-): Partial<Pick<InvestigationState, "provisionalCandidates">> {
+): Partial<Pick<ExplorationState, "provisionalCandidates">> {
   return checkpoint === null
     ? {}
     : { provisionalCandidates: structuredClone(checkpoint) };
 }
 
-function returnedObservation(
-  event: InvestigationTraceEvent,
-  snapshotId: string,
-) {
+function returnedObservation(event: ExplorationTraceEvent, snapshotId: string) {
   if (event.type !== "tool" || !event.toolCallId || !event.result) return null;
   const result = event.result;
   if (
@@ -189,7 +183,7 @@ function returnedObservation(
 
 /** No independent mutable copy of the latest tool observation is retained. */
 export function latestObservation(
-  state: Pick<InvestigationState, "snapshotId" | "trace">,
+  state: Pick<ExplorationState, "snapshotId" | "trace">,
 ): { toolCallId: string; result: InspectionResult } | null {
   for (let index = state.trace.length - 1; index >= 0; index--) {
     const observation = returnedObservation(
@@ -203,7 +197,7 @@ export function latestObservation(
 
 /** Derived visibility includes listings/errors as known calls with no code lines. */
 export function returnedEvidence(
-  state: Pick<InvestigationState, "snapshotId" | "trace">,
+  state: Pick<ExplorationState, "snapshotId" | "trace">,
 ): ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<number>>> {
   const calls = new Map<string, Map<string, Set<number>>>();
   for (const event of state.trace) {
@@ -227,15 +221,15 @@ export function returnedEvidence(
 
 /** Project trusted state into the existing artifact contract, detached from inputs. */
 export function projectRunResult(
-  committed: InvestigationProgress,
+  committed: ExplorationProgress,
   metadata: Pick<RunResult, "request" | "exclusions">,
   elapsedMs: number,
 ): RunResult {
   if (!Number.isFinite(elapsedMs) || elapsedMs < 0)
     throw new Error("Elapsed time must be finite and nonnegative");
-  const state = projectInvestigationProgress(committed);
+  const state = projectExplorationProgress(committed);
   // One strict check at the output boundary, before anything is saved.
-  investigationProgressSchema.parse(state);
+  explorationProgressSchema.parse(state);
   const completed = state.termination?.reason === "model_finished";
   if (completed !== (state.finalCandidates !== null))
     throw new Error(
